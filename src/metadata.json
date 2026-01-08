@@ -1,0 +1,8 @@
+{
+    "name": "AgroConnect Chile",
+    "description": "Plataforma de gestión de fuerza laboral agrícola temporal con integración de IA, gestión de consentimiento y automatización de notificaciones.",
+    "requestFramePermissions": [
+      "geolocation"
+    ]
+  }
+  
