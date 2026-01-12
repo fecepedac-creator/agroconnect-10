@@ -29,7 +29,6 @@ import Jobs from "./components/Jobs";
 import AdminPanel from "./components/AdminPanel";
 import AIReview from "./components/AIReview";
 import WorkerPortal from "./components/WorkerPortal";
-import WorkerAuthScreen from "./components/WorkerAuthScreen";
 import LoginScreen from "./components/LoginScreen";
 import GlobalSearch from "./components/GlobalSearch";
 import CompanySettings from "./components/CompanySettings";
@@ -53,7 +52,6 @@ const App: React.FC = () => {
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isWorkerAuthenticated, setIsWorkerAuthenticated] = useState(false);
 
   // Demo Mode State (usado por AdminPanel)
   const [isDemoMode, setIsDemoMode] = useState(false);
@@ -97,9 +95,7 @@ const App: React.FC = () => {
     }
 
     if (role === UserRole.WORKER) {
-      setCurrentCompany(null);
-      setIsWorkerAuthenticated(false);
-      setCurrentView(AppView.WORKER_PORTAL);
+      window.location.assign("/trabajos");
       return;
     }
   };
@@ -127,7 +123,6 @@ const App: React.FC = () => {
   const handleLogout = () => {
     setUserRole(null);
     setCurrentCompany(null);
-    setIsWorkerAuthenticated(false);
     setCurrentView(AppView.DASHBOARD);
     setIsSidebarOpen(false);
   };
