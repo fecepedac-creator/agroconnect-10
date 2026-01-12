@@ -1,410 +1,741 @@
-
-import React, { useState, useEffect } from 'react';
-import { JobOffer, Coordinates, WorkerTab } from '../types';
-import { getCurrentPosition, calculateDistance } from '../services/geolocationService';
-import { LEGAL_CONTENT } from '../legalContent';
-import { applicantStore, Applicant } from '../services/applicantStore';
-import { 
-  MapPin, 
-  User, 
-  CheckCircle2, 
-  LogOut, 
-  Briefcase, 
-  KeyRound, 
-  Bus, 
-  Utensils, 
-  Coins, 
-  Info,
-  X,
-  FileText,
-  ShieldCheck,
-  Navigation,
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import {
+  collection,
+  collectionGroup,
+  doc,
+  getDoc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+import {
+  Briefcase,
+  Building2,
   Calendar,
-  Phone,
-  Lock
-} from 'lucide-react';
-import * as rut from 'rut.js';
+  CheckCircle2,
+  ClipboardList,
+  FileText,
+  Lock,
+  LogOut,
+  MapPin,
+  ShieldCheck,
+  User as UserIcon,
+} from "lucide-react";
+import { auth, db } from "../firebase";
+import { logoutWorker } from "../services/authWorker";
+import WorkerAuthScreen from "./WorkerAuthScreen";
+import type { JobOffer } from "../types";
 
-interface WorkerPortalProps {
-  jobs: JobOffer[];
-  onLogout: () => void;
-}
+type WorkerPortalProps = {
+  onExit?: () => void;
+};
 
-interface JobWithDistance extends JobOffer {
-  distance?: number;
-}
+type JobListing = JobOffer & {
+  id: string;
+  companyId: string;
+  companyName?: string;
+};
 
-const CATEGORIES = [
-  { id: 'all', label: 'Todos', emoji: '' },
-  { id: 'Cosecha', label: 'Cosecha', emoji: '🍒' },
-  { id: 'Packing', label: 'Packing', emoji: '🏭' },
-  { id: 'Maquinaria', label: 'Maquinaria', emoji: '🚜' },
-  { id: 'Poda', label: 'Poda', emoji: '✂️' },
-];
+type WorkerProfile = {
+  fullName?: string;
+  rut?: string;
+  phone?: string;
+};
 
-const SESSION_KEY = 'agroconnect_worker_session';
+type WorkerDocument = {
+  id: string;
+  status?: string;
+  updatedAt?: any;
+  fileName?: string;
+};
 
-const WorkerPortal: React.FC<WorkerPortalProps> = ({ jobs, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<WorkerTab>(WorkerTab.PROFILE);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [currentUser, setCurrentUser] = useState<{name: string, rut: string} | null>(null);
-  const [isRegistering, setIsRegistering] = useState(false);
-  
-  const [isAvailable, setIsAvailable] = useState(true);
-  const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
-  const [sortedJobs, setSortedJobs] = useState<JobWithDistance[]>(jobs);
-  const [applications, setApplications] = useState<(Applicant & { jobId: string, jobTitle: string })[]>([]);
+type WorkerApplication = {
+  id: string;
+  jobId: string;
+  companyId: string;
+  jobTitle?: string;
+  companyName?: string;
+  appliedAt?: any;
+  status?: string;
+};
 
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
-
-  const [loginRut, setLoginRut] = useState('');
-  const [password, setPassword] = useState('');
-
-  const [regData, setRegData] = useState({
-    name: '', rut: '', phone: '', password: '', confirmPassword: ''
-  });
-  const [isRutValid, setIsRutValid] = useState(false);
-  
-  const [acceptedTerms, setAcceptedTerms] = useState(false);
-  const [showFullTerms, setShowFullTerms] = useState(false);
-  
-  const handleRutChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawValue = e.target.value.replace(/[^0-9kK.-]/g, '');
-    const formattedRut = rut.format(rawValue);
-    const isValid = rut.validate(formattedRut);
-    setRegData({ ...regData, rut: formattedRut });
-    setIsRutValid(isValid);
-  };
+const usePath = () => {
+  const [path, setPath] = useState(window.location.pathname);
 
   useEffect(() => {
-    const savedSession = localStorage.getItem(SESSION_KEY);
-    if (savedSession) {
-      try {
-        const user = JSON.parse(savedSession);
-        setCurrentUser(user);
-        setIsLoggedIn(true);
-        setActiveTab(WorkerTab.JOBS);
-      } catch (e) { console.error("Failed to parse session", e); }
-    }
+    const handlePop = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
   }, []);
 
-  useEffect(() => {
-    if (currentUser) {
-      const apps = applicantStore.getAllWorkerApplications(currentUser.rut);
-      setApplications(apps.map(app => ({
-        ...app,
-        jobTitle: jobs.find(j => j.id === app.jobId)?.title || 'Oferta Desconocida'
-      })));
-    }
-  }, [currentUser, jobs]);
-  
-  useEffect(() => {
-    if (isLoggedIn) {
-        setActiveTab(WorkerTab.JOBS);
-    }
-  }, [isLoggedIn]);
+  const navigate = useCallback((to: string) => {
+    if (to === window.location.pathname) return;
+    window.history.pushState({}, "", to);
+    setPath(to);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
 
-  const handleApply = (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!isLoggedIn) { setActiveTab(WorkerTab.PROFILE); return; }
-    if (confirm("¿Confirmas tu postulación a esta oferta?")) {
-      applicantStore.addApplicant(jobId, {
-        workerId: currentUser!.rut,
-        workerName: currentUser!.name,
-        skills: [],
-        appliedAt: new Date().toISOString()
-      });
-      const apps = applicantStore.getAllWorkerApplications(currentUser!.rut);
-      setApplications(apps.map(app => ({...app, jobTitle: jobs.find(j => j.id === app.jobId)?.title || 'Oferta' })));
-      alert("✅ ¡Postulación enviada con éxito!");
-    }
-  };
+  return { path, navigate };
+};
+
+const useAuthUser = () => {
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let filtered = selectedCategory === 'all' ? jobs : jobs.filter(j => j.category === selectedCategory);
-    if (userLocation) {
-      const withDist = filtered.map(job => ({ ...job, distance: calculateDistance(userLocation, job.coordinates) }));
-      withDist.sort((a, b) => (a.distance || 999) - (b.distance || 999));
-      setSortedJobs(withDist);
-    } else {
-      setSortedJobs(filtered);
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setAuthUser(user);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  return { authUser, loading };
+};
+
+const useJobs = () => {
+  const [jobs, setJobs] = useState<JobListing[]>([]);
+  const companyCache = useRef(new Map<string, string>());
+
+  useEffect(() => {
+    const q = query(collectionGroup(db, "jobs"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, async (snap) => {
+      const entries = await Promise.all(
+        snap.docs.map(async (docSnap) => {
+          const data = docSnap.data() as any;
+          const companyId = docSnap.ref.parent.parent?.id ?? data.companyId ?? "";
+          let companyName = data.companyName ?? "";
+
+          if (!companyName && companyId) {
+            const cached = companyCache.current.get(companyId);
+            if (cached) {
+              companyName = cached;
+            } else {
+              const companySnap = await getDoc(doc(db, "companies", companyId));
+              if (companySnap.exists()) {
+                companyName = (companySnap.data() as any).name ?? "";
+                if (companyName) companyCache.current.set(companyId, companyName);
+              }
+            }
+          }
+
+          return {
+            id: docSnap.id,
+            title: data.title ?? "",
+            description: data.description ?? "",
+            workersNeeded: data.workersNeeded ?? 0,
+            workersFilled: data.workersFilled ?? 0,
+            startDate: data.startDate ?? "",
+            location: data.location ?? "",
+            coordinates: data.coordinates ?? { lat: 0, lng: 0 },
+            isActive: data.isActive ?? false,
+            jobStatus: data.jobStatus ?? (data.isActive ? "active" : "future"),
+            category: data.category ?? "Otros",
+            paymentType: data.paymentType,
+            payMode: data.payMode,
+            payAmount: data.payAmount,
+            payDetail: data.payDetail,
+            skillsRequired: data.skillsRequired,
+            benefits: data.benefits,
+            transportInfo: data.transportInfo,
+            otherBenefits: data.otherBenefits,
+            companyId,
+            companyName,
+          } as JobListing;
+        })
+      );
+
+      setJobs(entries);
+    });
+
+    return () => unsub();
+  }, []);
+
+  return jobs;
+};
+
+const useWorkerApplications = (uid?: string) => {
+  const [applications, setApplications] = useState<WorkerApplication[]>([]);
+
+  useEffect(() => {
+    if (!uid) {
+      setApplications([]);
+      return;
     }
-  }, [userLocation, jobs, selectedCategory]);
 
-  const renderJobsTab = () => (
-    <div className="pb-24">
-      <div className="bg-emerald-600 p-6 rounded-b-3xl shadow-lg mb-6 text-white text-center">
-        <h2 className="text-xl font-bold">Hola, {currentUser?.name.split(' ')[0] || 'Trabajador'} 👋</h2>
-        <p className="text-emerald-100 text-sm mb-4">Encuentra faenas agrícolas cercanas</p>
-        <button onClick={async () => setUserLocation(await getCurrentPosition())} className="bg-white/20 px-4 py-2 rounded-full text-xs font-bold hover:bg-white/30 transition-colors flex items-center gap-2 mx-auto shadow-md">
-          {userLocation ? <><CheckCircle2 size={14}/> GPS Activo</> : <><MapPin size={14}/> Activar Cercanía GPS</>}
-        </button>
-      </div>
+    const q = query(collection(db, "workers", uid, "applications"), orderBy("appliedAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => {
+      const list = snap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...(docSnap.data() as any),
+      }));
+      setApplications(list as WorkerApplication[]);
+    });
 
-      <div className="px-4 mb-6 overflow-x-auto no-scrollbar flex gap-2">
-        {CATEGORIES.map(cat => (
-          <button key={cat.id} onClick={() => setSelectedCategory(cat.id)} className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap border transition-all ${selectedCategory === cat.id ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 border-gray-100'}`}>
-            {cat.emoji} {cat.label}
-          </button>
-        ))}
-      </div>
+    return () => unsub();
+  }, [uid]);
 
-      <div className="px-4 space-y-4">
-        {sortedJobs.map(job => {
-          const isApplied = applications.some(app => app.jobId === job.id);
-          const isExpanded = expandedJobId === job.id;
-          return (
-            <div key={job.id} onClick={() => setExpandedJobId(isExpanded ? null : job.id)} className={`bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden transition-all ${isExpanded ? 'ring-2 ring-emerald-500 shadow-md scale-[1.02]' : ''}`}>
-              <div className="p-5">
-                <div className="flex justify-between items-start mb-3">
-                  <div>
-                    <span className="text-[10px] font-black uppercase bg-gray-100 text-gray-500 px-2 py-0.5 rounded">{job.category}</span>
-                    <h3 className="font-bold text-gray-800 text-lg mt-1 leading-tight">{job.title}</h3>
-                  </div>
-                  {job.distance !== undefined && <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100">a {job.distance.toFixed(1)} km</span>}
-                </div>
-                
-                <div className="flex gap-3 mb-4">
-                   <div className="bg-emerald-50 text-emerald-700 p-2 rounded-xl flex flex-col items-center justify-center w-14 h-14 border border-emerald-100"><Coins size={18}/><span className="text-[8px] font-black mt-1 uppercase text-center">{job.paymentType}</span></div>
-                   <div className={`p-2 rounded-xl flex flex-col items-center justify-center w-14 h-14 border ${job.benefits?.transport ? 'bg-blue-50 text-blue-700 border-blue-100' : 'bg-gray-50 text-gray-300 border-gray-100'}`}><Bus size={18}/><span className="text-[8px] font-black mt-1 uppercase">Bus</span></div>
-                   <div className={`p-2 rounded-xl flex flex-col items-center justify-center w-14 h-14 border ${job.benefits?.lunch ? 'bg-orange-50 text-orange-700 border-orange-100' : 'bg-gray-50 text-gray-300 border-gray-100'}`}><Utensils size={18}/><span className="text-[8px] font-black mt-1 uppercase">Almuerzo</span></div>
-                </div>
+  return applications;
+};
 
-                {isExpanded && (
-                  <div className="border-t pt-4 mb-4 animate-in slide-in-from-top-2">
-                    <p className="text-gray-600 text-sm mb-4 leading-relaxed">{job.description}</p>
-                    
-                    <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3 italic">Detalles y Logística de Faena</h4>
-                    <div className="space-y-3">
-                      {job.benefits?.transport && (
-                        <div className="flex gap-3 items-start p-3 bg-blue-50 rounded-xl border border-blue-100">
-                           <Navigation size={18} className="text-blue-600 shrink-0" />
-                           <div>
-                             <p className="text-xs font-bold text-blue-800 uppercase tracking-tighter">Traslado</p>
-                             <p className="text-xs text-blue-600 mt-0.5">{job.transportInfo || 'Se informará al confirmar.'}</p>
-                           </div>
-                        </div>
-                      )}
-                      {job.otherBenefits && (
-                        <div className="flex gap-3 items-start p-3 bg-emerald-50 rounded-xl border border-emerald-100">
-                           <ShieldCheck size={18} className="text-emerald-600 shrink-0" />
-                           <div>
-                             <p className="text-xs font-bold text-emerald-800 uppercase tracking-tighter">Kit de Seguridad / Extras</p>
-                             <p className="text-xs text-emerald-600 mt-0.5">{job.otherBenefits}</p>
-                           </div>
-                        </div>
-                      )}
-                      <div className="flex gap-3 items-start p-3 bg-gray-50 rounded-xl border border-gray-100">
-                         <MapPin size={18} className="text-gray-400 shrink-0" />
-                         <div>
-                           <p className="text-xs font-bold text-gray-700 uppercase tracking-tighter">Ubicación Faena</p>
-                           <p className="text-xs text-gray-500 mt-0.5">{job.location}</p>
-                         </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between mt-2">
-                  <div className="flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase"><Calendar size={14} className="text-emerald-500"/> {job.startDate}</div>
-                  {isApplied ? (
-                    <button disabled className="bg-emerald-100 text-emerald-700 px-6 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1"><CheckCircle2 size={14}/> Ya Postulado</button>
-                  ) : (
-                    <button onClick={(e) => handleApply(job.id, e)} className="bg-gray-900 text-white px-6 py-2 rounded-xl text-xs font-black uppercase hover:bg-black transition-all shadow-md active:scale-95">Postular Ahora</button>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+const RegisterCTASticky = ({ onClick }: { onClick: () => void }) => (
+  <div className="fixed bottom-0 inset-x-0 z-40 bg-emerald-600 text-white">
+    <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div className="font-extrabold text-sm sm:text-base tracking-tight">Regístrate gratis para postular</div>
+      <button
+        onClick={onClick}
+        className="bg-white text-emerald-700 px-5 py-2 rounded-full text-xs sm:text-sm font-black uppercase tracking-wider shadow-lg hover:bg-emerald-50"
+      >
+        Crear cuenta
+      </button>
     </div>
-  );
+  </div>
+);
 
-  const renderProfileTab = () => {
-    if (!isLoggedIn) {
-      if (isRegistering) {
-        
-        const handleRegister = () => {
-          if (!regData.name || !regData.rut || !regData.phone || !regData.password) {
-            alert("¡Ups! Parece que faltan campos por completar.");
-            return;
-          }
-           if (!isRutValid) {
-            alert("El RUT ingresado no es válido.");
-            return;
-          }
-          if (regData.phone.length !== 8) {
-            alert("¡Atención! El número de teléfono debe tener 8 dígitos.");
-            return;
-          }
-          if (regData.password !== regData.confirmPassword) {
-            alert("¡Atención! Las contraseñas que ingresaste no coinciden.");
-            return;
-          }
-          if (!acceptedTerms) {
-            alert("Para continuar, es necesario que aceptes los términos y condiciones.");
-            return;
-          }
+const LockedSection = ({ title, children }: { title: string; children: React.ReactNode }) => (
+  <div className="relative rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/50 p-5">
+    <div className="absolute inset-0 flex flex-col items-center justify-center text-center gap-2 text-emerald-700">
+      <Lock size={20} />
+      <p className="text-xs font-black uppercase tracking-widest">{title}</p>
+      <p className="text-[11px] font-semibold text-emerald-700/80">Regístrate gratis para desbloquear</p>
+    </div>
+    <div className="blur-sm opacity-60 select-none pointer-events-none">{children}</div>
+  </div>
+);
 
-          const newUser = { name: regData.name, rut: regData.rut, phone: `+569${regData.phone}`, password: regData.password };
-
-          localStorage.setItem(SESSION_KEY, JSON.stringify(newUser));
-
-          alert(`¡Bienvenido a AgroConnect, ${newUser.name.split(' ')[0]}! Tu perfil ha sido creado.`);
-
-          setCurrentUser(newUser);
-          setIsLoggedIn(true);
-          setIsRegistering(false);
-        };
-
-        return (
-          <div className="px-6 py-10 space-y-6">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold">Crea tu Cuenta</h2>
-              <p className="text-gray-500 text-sm">Regístrate para postular a ofertas.</p>
-            </div>
-            <div className="space-y-3">
-              <div className="relative"><User className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} /><input type="text" required className="w-full p-4 pl-12 border border-gray-200 rounded-2xl text-sm font-bold" placeholder="Nombre Completo" value={regData.name} onInput={(e) => e.currentTarget.value = e.currentTarget.value.toUpperCase()} onChange={e => setRegData({...regData, name: e.target.value})} /></div>
-              <div className="relative">
-                <FileText className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                <input 
-                  type="text" 
-                  required 
-                  className={`w-full p-4 pl-12 pr-12 border rounded-2xl text-sm font-bold ${isRutValid ? 'border-emerald-500' : 'border-gray-200'}`}
-                  placeholder="RUT (EJ: 12.345.678-9)" 
-                  value={regData.rut} 
-                  onChange={handleRutChange} 
-                />
-                {isRutValid && <CheckCircle2 className="absolute right-4 top-1/2 -translate-y-1/2 text-emerald-500" size={18} />}
-              </div>
-              <div className="relative flex items-center"><Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} /><span className="p-4 pl-12 border border-r-0 border-gray-200 rounded-l-2xl text-sm font-bold bg-gray-100 text-gray-500">+569</span><input type="tel" required maxLength={8} className="w-full p-4 border border-gray-200 rounded-r-2xl text-sm font-bold" placeholder="8 dígitos" value={regData.phone} onChange={e => setRegData({...regData, phone: e.target.value.replace(/[^0-9]/g, '')})} /></div>
-              <div className="relative"><Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} /><input type="password" required className="w-full p-4 pl-12 border border-gray-200 rounded-2xl text-sm" placeholder="Contraseña" value={regData.password} onChange={e => setRegData({...regData, password: e.target.value})} /></div>
-              <div className="relative"><Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} /><input type="password" required className="w-full p-4 pl-12 border border-gray-200 rounded-2xl text-sm" placeholder="Confirmar Contraseña" value={regData.confirmPassword} onChange={e => setRegData({...regData, confirmPassword: e.target.value})} /></div>
-
-               <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
-                  <h4 className="font-bold text-blue-800 text-[10px] uppercase flex items-center gap-2 tracking-widest"><Info size={14}/> Resumen Legal Trabajador</h4>
-                  <ul className="mt-2 space-y-1">
-                    {LEGAL_CONTENT.legal.summaries.worker_standard.bullets.map((b,i) => <li key={i} className="text-[10px] text-blue-700 leading-tight font-medium italic">• {b}</li>)}
-                  </ul>
-               </div>
-
-               <div className="flex items-start gap-3 pt-2">
-                  <input id="terms" type="checkbox" checked={acceptedTerms} onChange={e => setAcceptedTerms(e.target.checked)} className="mt-1 w-5 h-5 accent-emerald-600 shrink-0" />
-                  <label htmlFor="terms" className="text-[11px] text-gray-500 font-bold leading-tight">Acepto los <button onClick={() => setShowFullTerms(true)} className="text-emerald-700 font-black underline">términos y condiciones</button> de AgroConnect Chile.</label>
-               </div>
-
-               <button onClick={handleRegister} disabled={!acceptedTerms || !isRutValid} className={`w-full py-4 rounded-2xl font-black uppercase tracking-widest text-sm shadow-lg transform transition-all active:scale-95 ${acceptedTerms && isRutValid ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>Crear Perfil</button>
-               <button onClick={() => setIsRegistering(false)} className="w-full text-xs font-bold text-gray-500 pt-2">¿Ya tienes cuenta? Ingresa aquí</button>
-            </div>
-          </div>
-        );
-      }
-      return (
-        <div className="px-6 py-20 flex flex-col items-center">
-          <div className="bg-emerald-100 p-5 rounded-full mb-6 text-emerald-600 shadow-inner"><KeyRound size={48}/></div>
-          <h2 className="text-2xl font-black text-gray-800 mb-8 uppercase tracking-tighter">Ingreso Trabajador</h2>
-          <div className="w-full space-y-4">
-            <input type="text" value={loginRut} onChange={e => setLoginRut(rut.format(e.target.value))} className="w-full p-4 border-2 border-gray-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="RUT (12.345.678-9)" />
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full p-4 border-2 border-gray-100 rounded-2xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Contraseña" />
-            <button onClick={() => {
-                const savedSession = localStorage.getItem(SESSION_KEY);
-                if (savedSession) {
-                    try {
-                      const user = JSON.parse(savedSession);
-                      if(user.rut === loginRut && user.password === password) {
-                        setIsLoggedIn(true); 
-                        setCurrentUser(user);
-                      } else {
-                        alert("Credenciales incorrectas. Revisa tu RUT y contraseña.");
-                      }
-                    } catch (e) {
-                      alert("Error al procesar datos locales. Intenta registrarte de nuevo.");
-                    }
-                } else {
-                   alert("No hay usuarios registrados con ese RUT. Por favor, crea un perfil.");
-                }
-            }} className="w-full bg-gray-900 text-white py-4 rounded-2xl font-black uppercase shadow-xl transform transition-all active:scale-95">Iniciar Sesión</button>
-            <button onClick={() => setIsRegistering(true)} className="w-full border-2 border-emerald-600 text-emerald-700 py-3 rounded-2xl text-xs font-black uppercase tracking-widest mt-4">Crear Perfil Nuevo</button>
+const PublicLayout = ({ children, onAuthClick }: { children: React.ReactNode; onAuthClick: () => void }) => (
+  <div className="min-h-screen bg-gray-50 text-gray-900">
+    <header className="bg-white border-b border-gray-100 sticky top-0 z-30">
+      <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="h-9 w-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black">A</div>
+          <div>
+            <div className="text-base font-extrabold text-gray-900">AgroConnect</div>
+            <div className="text-[10px] font-semibold text-emerald-600 uppercase">Portal Trabajador</div>
           </div>
         </div>
+        <button onClick={onAuthClick} className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
+          Ingresar / Registrarme
+        </button>
+      </div>
+    </header>
+    <main className="max-w-6xl mx-auto px-4 py-8 pb-28">{children}</main>
+  </div>
+);
+
+const WorkerLayout = ({ children, onNavigate, onLogout }: { children: React.ReactNode; onNavigate: (to: string) => void; onLogout: () => void }) => (
+  <div className="min-h-screen bg-gray-50 text-gray-900">
+    <header className="bg-white border-b border-gray-100 sticky top-0 z-30">
+      <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <div className="h-9 w-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black">A</div>
+          <div>
+            <div className="text-base font-extrabold text-gray-900">AgroConnect</div>
+            <div className="text-[10px] font-semibold text-emerald-600 uppercase">Portal Trabajador</div>
+          </div>
+        </div>
+        <nav className="flex flex-wrap gap-2">
+          <button onClick={() => onNavigate("/trabajos")} className="px-3 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700">
+            Ofertas
+          </button>
+          <button onClick={() => onNavigate("/worker")} className="px-3 py-1.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700">
+            Inicio
+          </button>
+          <button
+            onClick={() => onNavigate("/worker/postulaciones")}
+            className="px-3 py-1.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700"
+          >
+            Postulaciones
+          </button>
+          <button onClick={() => onNavigate("/worker/perfil")} className="px-3 py-1.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700">
+            Mi Perfil
+          </button>
+        </nav>
+        <button
+          onClick={onLogout}
+          className="inline-flex items-center gap-2 text-xs font-bold text-gray-500 hover:text-gray-800"
+        >
+          <LogOut size={16} />
+          Cerrar sesión
+        </button>
+      </div>
+    </header>
+    <main className="max-w-6xl mx-auto px-4 py-8">{children}</main>
+  </div>
+);
+
+const JobCardPublic = ({ job, onSelect }: { job: JobListing; onSelect: () => void }) => (
+  <button
+    onClick={onSelect}
+    className="w-full text-left bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition p-5"
+  >
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+          {job.category}
+        </span>
+        <h3 className="text-lg font-extrabold text-gray-900 mt-2">{job.title}</h3>
+        <p className="text-sm text-gray-500 mt-1 flex items-center gap-2">
+          <Building2 size={14} /> {job.companyName || "Empresa"}
+        </p>
+      </div>
+      <div className="text-right text-xs text-gray-400 font-semibold">
+        <div className="flex items-center gap-1 justify-end">
+          <MapPin size={14} className="text-emerald-600" /> {job.location || "Ubicación por confirmar"}
+        </div>
+        <div className="flex items-center gap-1 justify-end mt-1">
+          <Calendar size={14} className="text-emerald-600" /> {job.startDate || "Jornada por confirmar"}
+        </div>
+      </div>
+    </div>
+  </button>
+);
+
+const JobCardPrivate = ({ job, onSelect, applied }: { job: JobListing; onSelect: () => void; applied: boolean }) => (
+  <button
+    onClick={onSelect}
+    className="w-full text-left bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition p-5"
+  >
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+            {job.category}
+          </span>
+          <h3 className="text-lg font-extrabold text-gray-900 mt-2">{job.title}</h3>
+          <p className="text-sm text-gray-500 mt-1 flex items-center gap-2">
+            <Building2 size={14} /> {job.companyName || "Empresa"}
+          </p>
+        </div>
+        <div className="text-right text-xs text-gray-400 font-semibold">
+          <div className="flex items-center gap-1 justify-end">
+            <MapPin size={14} className="text-emerald-600" /> {job.location || "Ubicación por confirmar"}
+          </div>
+          <div className="flex items-center gap-1 justify-end mt-1">
+            <Calendar size={14} className="text-emerald-600" /> {job.startDate || "Jornada por confirmar"}
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2 text-xs text-gray-600 font-semibold">
+        {job.paymentType && <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full">Pago: {job.paymentType}</span>}
+        {job.payMode && <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full">{job.payMode}</span>}
+        {job.payAmount && (
+          <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">${job.payAmount.toLocaleString("es-CL")}</span>
+        )}
+        {applied && (
+          <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full flex items-center gap-1">
+            <CheckCircle2 size={14} /> Ya postulado
+          </span>
+        )}
+      </div>
+    </div>
+  </button>
+);
+
+const JobDetailPublic = ({ job }: { job: JobListing }) => (
+  <div className="space-y-6">
+    <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
+      <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
+        {job.category}
+      </span>
+      <h2 className="text-2xl font-extrabold text-gray-900 mt-3">{job.title}</h2>
+      <p className="text-sm text-gray-500 mt-2 flex items-center gap-2">
+        <Building2 size={14} /> {job.companyName || "Empresa"}
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 text-sm text-gray-600">
+        <div className="flex items-center gap-2">
+          <MapPin size={16} className="text-emerald-600" /> {job.location || "Ubicación por confirmar"}
+        </div>
+        <div className="flex items-center gap-2">
+          <Calendar size={16} className="text-emerald-600" /> {job.startDate || "Jornada por confirmar"}
+        </div>
+      </div>
+      <p className="text-sm text-gray-500 mt-6 leading-relaxed">
+        {job.description ? `${job.description.slice(0, 180)}...` : "Detalles en proceso de publicación."}
+      </p>
+    </div>
+
+    <LockedSection title="Pago y beneficios">
+      <div className="flex flex-wrap gap-2 text-xs text-gray-600 font-semibold">
+        <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">Pago: {job.paymentType || "Por definir"}</span>
+        <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">Beneficios adicionales</span>
+        <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">Transporte incluido</span>
+      </div>
+    </LockedSection>
+
+    <LockedSection title="Requisitos completos">
+      <div className="text-sm text-gray-600 space-y-2">
+        <p>Experiencia previa en faenas agrícolas.</p>
+        <p>Disponibilidad inmediata y puntualidad.</p>
+        <p>Documentación al día.</p>
+      </div>
+    </LockedSection>
+  </div>
+);
+
+const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied: boolean; onApply: () => void }) => (
+  <div className="space-y-6">
+    <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
+      <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
+        {job.category}
+      </span>
+      <h2 className="text-2xl font-extrabold text-gray-900 mt-3">{job.title}</h2>
+      <p className="text-sm text-gray-500 mt-2 flex items-center gap-2">
+        <Building2 size={14} /> {job.companyName || "Empresa"}
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 text-sm text-gray-600">
+        <div className="flex items-center gap-2">
+          <MapPin size={16} className="text-emerald-600" /> {job.location || "Ubicación por confirmar"}
+        </div>
+        <div className="flex items-center gap-2">
+          <Calendar size={16} className="text-emerald-600" /> {job.startDate || "Jornada por confirmar"}
+        </div>
+      </div>
+      <p className="text-sm text-gray-600 mt-6 leading-relaxed">{job.description || "Sin descripción adicional."}</p>
+      <div className="flex flex-wrap gap-2 mt-5 text-xs font-semibold">
+        {job.paymentType && <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full">Pago: {job.paymentType}</span>}
+        {job.payMode && <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full">{job.payMode}</span>}
+        {job.payAmount && (
+          <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">${job.payAmount.toLocaleString("es-CL")}</span>
+        )}
+        {job.payDetail && <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">{job.payDetail}</span>}
+      </div>
+
+      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+        {job.benefits?.transport && (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 flex items-start gap-3">
+            <ShieldCheck size={18} className="text-emerald-600" />
+            <div>
+              <p className="font-bold text-emerald-800">Transporte incluido</p>
+              <p className="text-xs text-emerald-700">{job.transportInfo || "Detalles a confirmar."}</p>
+            </div>
+          </div>
+        )}
+        {job.otherBenefits && (
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 flex items-start gap-3">
+            <FileText size={18} className="text-blue-600" />
+            <div>
+              <p className="font-bold text-blue-800">Beneficios extra</p>
+              <p className="text-xs text-blue-700">{job.otherBenefits}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+
+    <div className="flex flex-col sm:flex-row gap-3">
+      <button
+        onClick={onApply}
+        disabled={applied}
+        className={`flex-1 px-6 py-3 rounded-2xl text-sm font-black uppercase tracking-widest transition ${
+          applied
+            ? "bg-emerald-100 text-emerald-600 cursor-not-allowed"
+            : "bg-emerald-600 text-white hover:bg-emerald-700"
+        }`}
+      >
+        {applied ? "Ya postulaste" : "Postular ahora"}
+      </button>
+      <div className="flex-1 rounded-2xl border border-gray-100 bg-white p-4 text-xs text-gray-500 flex items-center gap-2">
+        <ClipboardList size={16} className="text-emerald-600" />
+        Tu postulación quedará registrada en tu perfil.
+      </div>
+    </div>
+  </div>
+);
+
+const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
+  const { path, navigate } = usePath();
+  const { authUser, loading } = useAuthUser();
+  const jobs = useJobs();
+  const applications = useWorkerApplications(authUser?.uid);
+  const [workerProfile, setWorkerProfile] = useState<WorkerProfile | null>(null);
+  const [workerDocs, setWorkerDocs] = useState<WorkerDocument[]>([]);
+
+  useEffect(() => {
+    if (!authUser) {
+      setWorkerProfile(null);
+      setWorkerDocs([]);
+      return;
+    }
+
+    const workerRef = doc(db, "workers", authUser.uid);
+    const docsRef = collection(db, "workers", authUser.uid, "documents");
+
+    const unsubWorker = onSnapshot(workerRef, (snap) => {
+      setWorkerProfile((snap.data() as WorkerProfile) ?? null);
+    });
+
+    const unsubDocs = onSnapshot(docsRef, (snap) => {
+      setWorkerDocs(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })));
+    });
+
+    return () => {
+      unsubWorker();
+      unsubDocs();
+    };
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser && path.startsWith("/worker")) {
+      navigate("/trabajos");
+    }
+  }, [authUser, navigate, path]);
+
+  useEffect(() => {
+    if (authUser && path === "/auth") {
+      navigate("/worker");
+    }
+  }, [authUser, navigate, path]);
+
+  const visibleJobs = useMemo(
+    () => jobs.filter((job) => (job.jobStatus ?? "active") !== "closed"),
+    [jobs]
+  );
+
+  const jobIdMatch = path.match(/^\/trabajos\/([^/]+)$/);
+  const selectedJob = jobIdMatch ? visibleJobs.find((job) => job.id === jobIdMatch[1]) : undefined;
+
+  const appliedToSelected = selectedJob
+    ? applications.some((app) => app.jobId === selectedJob.id && app.companyId === selectedJob.companyId)
+    : false;
+
+  const handleApply = async () => {
+    if (!authUser || !selectedJob) return;
+
+    const applicationId = `${selectedJob.companyId}_${selectedJob.id}`;
+    const applicationRef = doc(db, "workers", authUser.uid, "applications", applicationId);
+
+    await setDoc(
+      applicationRef,
+      {
+        jobId: selectedJob.id,
+        companyId: selectedJob.companyId,
+        jobTitle: selectedJob.title,
+        companyName: selectedJob.companyName ?? "",
+        appliedAt: serverTimestamp(),
+        status: "postulado",
+      },
+      { merge: true }
+    );
+  };
+
+  const handleLogout = async () => {
+    await logoutWorker();
+    if (onExit) onExit();
+    navigate("/trabajos");
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm text-gray-500">Cargando portal...</div>
+    );
+  }
+
+  if (path === "/auth") {
+    return <WorkerAuthScreen onSuccess={() => navigate("/worker")} onBack={() => navigate("/trabajos")} />;
+  }
+
+  if (path === "/worker" && authUser) {
+    return (
+      <WorkerLayout onNavigate={navigate} onLogout={handleLogout}>
+        <div className="grid gap-6">
+          <div className="bg-white rounded-3xl border border-emerald-100 p-6 shadow-sm">
+            <h2 className="text-xl font-extrabold text-gray-900">¡Hola, {workerProfile?.fullName || "Trabajador"}!</h2>
+            <p className="text-sm text-gray-500 mt-2">
+              Aquí podrás revisar tus postulaciones y actualizar tu perfil.
+            </p>
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="rounded-2xl bg-emerald-50 p-4 border border-emerald-100">
+                <div className="text-xs text-emerald-700 font-bold">Postulaciones activas</div>
+                <div className="text-2xl font-black text-emerald-700 mt-2">{applications.length}</div>
+              </div>
+              <div className="rounded-2xl bg-white p-4 border border-gray-100">
+                <div className="text-xs text-gray-500 font-bold">Ofertas disponibles</div>
+                <div className="text-2xl font-black text-gray-800 mt-2">{visibleJobs.length}</div>
+              </div>
+              <div className="rounded-2xl bg-white p-4 border border-gray-100">
+                <div className="text-xs text-gray-500 font-bold">Perfil</div>
+                <div className="text-sm font-semibold text-gray-700 mt-2">{workerProfile?.rut || "Sin RUT"}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-extrabold text-gray-900">Últimas ofertas</h3>
+              <button onClick={() => navigate("/trabajos")} className="text-xs font-bold text-emerald-600">
+                Ver todas
+              </button>
+            </div>
+            <div className="mt-4 grid gap-4">
+              {visibleJobs.slice(0, 3).map((job) => (
+                <JobCardPrivate
+                  key={`${job.companyId}-${job.id}`}
+                  job={job}
+                  applied={applications.some((app) => app.jobId === job.id && app.companyId === job.companyId)}
+                  onSelect={() => navigate(`/trabajos/${job.id}`)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      </WorkerLayout>
+    );
+  }
+
+  if (path === "/worker/postulaciones" && authUser) {
+    return (
+      <WorkerLayout onNavigate={navigate} onLogout={handleLogout}>
+        <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
+          <h2 className="text-xl font-extrabold text-gray-900">Mis postulaciones</h2>
+          <p className="text-sm text-gray-500 mt-2">Sigue el estado de tus postulaciones.</p>
+          <div className="mt-6 grid gap-4">
+            {applications.length === 0 && (
+              <div className="text-sm text-gray-400 text-center py-12 border border-dashed rounded-2xl">
+                Aún no tienes postulaciones registradas.
+              </div>
+            )}
+            {applications.map((app) => (
+              <div key={app.id} className="border border-gray-100 rounded-2xl p-4 flex flex-col sm:flex-row gap-3">
+                <div className="flex-1">
+                  <div className="text-sm font-extrabold text-gray-900">{app.jobTitle || "Oferta"}</div>
+                  <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                    <Building2 size={14} className="text-emerald-600" /> {app.companyName || "Empresa"}
+                  </div>
+                </div>
+                <div className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-2 rounded-full">
+                  {app.status || "postulado"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </WorkerLayout>
+    );
+  }
+
+  if (path === "/worker/perfil" && authUser) {
+    return (
+      <WorkerLayout onNavigate={navigate} onLogout={handleLogout}>
+        <div className="grid gap-6">
+          <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
+            <div className="flex items-center gap-4">
+              <div className="h-12 w-12 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-700">
+                <UserIcon size={24} />
+              </div>
+              <div>
+                <div className="text-lg font-extrabold text-gray-900">{workerProfile?.fullName || "Perfil"}</div>
+                <div className="text-xs text-gray-500">{workerProfile?.rut || "RUT por confirmar"}</div>
+              </div>
+            </div>
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm text-gray-600">
+              <div className="rounded-2xl border border-gray-100 p-4">
+                <div className="text-xs text-gray-400 font-bold uppercase">Teléfono</div>
+                <div className="mt-2 font-semibold text-gray-700">{workerProfile?.phone || "Sin teléfono"}</div>
+              </div>
+              <div className="rounded-2xl border border-gray-100 p-4">
+                <div className="text-xs text-gray-400 font-bold uppercase">UID</div>
+                <div className="mt-2 font-mono text-xs text-gray-500 break-all">{authUser.uid}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
+            <h3 className="text-lg font-extrabold text-gray-900">Documentos laborales</h3>
+            <p className="text-sm text-gray-500 mt-2">Estado de tus documentos registrados.</p>
+            <div className="mt-6 grid gap-3">
+              {workerDocs.length === 0 && (
+                <div className="text-sm text-gray-400 text-center py-10 border border-dashed rounded-2xl">
+                  Aún no hay documentos registrados.
+                </div>
+              )}
+              {workerDocs.map((docItem) => (
+                <div key={docItem.id} className="border border-gray-100 rounded-2xl p-4 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-bold text-gray-900">{docItem.id}</div>
+                    <div className="text-xs text-gray-500">{docItem.fileName || "Documento en revisión"}</div>
+                  </div>
+                  <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
+                    {docItem.status || "pendiente"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </WorkerLayout>
+    );
+  }
+
+  if (path.startsWith("/trabajos")) {
+    if (authUser) {
+      return (
+        <WorkerLayout onNavigate={navigate} onLogout={handleLogout}>
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-extrabold text-gray-900">Ofertas disponibles</h2>
+              <p className="text-sm text-gray-500 mt-2">Postula con un clic y da seguimiento desde tu perfil.</p>
+            </div>
+            {jobIdMatch && selectedJob ? (
+              <JobDetailPrivate job={selectedJob} applied={appliedToSelected} onApply={handleApply} />
+            ) : (
+              <div className="grid gap-4">
+                {visibleJobs.map((job) => (
+                  <JobCardPrivate
+                    key={`${job.companyId}-${job.id}`}
+                    job={job}
+                    applied={applications.some((app) => app.jobId === job.id && app.companyId === job.companyId)}
+                    onSelect={() => navigate(`/trabajos/${job.id}`)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </WorkerLayout>
       );
     }
 
     return (
-      <div className="px-4 py-8 space-y-6">
-        <div className="bg-gray-900 text-white p-8 rounded-3xl flex flex-col items-center shadow-2xl relative overflow-hidden">
-           <div className="absolute -right-6 -bottom-6 opacity-10"><User size={120}/></div>
-           <div className="w-20 h-20 bg-emerald-500 rounded-full flex items-center justify-center text-white text-3xl font-black mb-4 border-4 border-white/20 shadow-lg">{currentUser?.name.charAt(0)}</div>
-           <h2 className="text-xl font-black uppercase italic tracking-tighter">{currentUser?.name}</h2>
-           <p className="text-gray-400 text-xs font-mono font-bold tracking-widest">{currentUser?.rut}</p>
-           <button onClick={() => setIsAvailable(!isAvailable)} className={`mt-6 px-8 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-md ${isAvailable ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>{isAvailable ? 'Disponible para Faenas' : 'No disponible temporalmente'}</button>
-        </div>
-
-        <h3 className="font-black text-[11px] uppercase text-gray-400 tracking-[0.2em] px-2 flex justify-between items-center">Mis Postulaciones <span>{applications.length}</span></h3>
-        <div className="space-y-3">
-          {applications.length > 0 ? applications.map(app => (
-            <div key={app.jobId} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-center hover:border-emerald-200 transition-colors">
-              <div>
-                <p className="font-black text-gray-800 text-sm leading-tight uppercase tracking-tighter">{app.jobTitle}</p>
-                <p className="text-[10px] text-gray-400 uppercase font-bold mt-1 italic">{new Date(app.appliedAt).toLocaleDateString()}</p>
-              </div>
-              <span className="text-[9px] font-black uppercase bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200 shadow-sm">{app.attendanceStatus}</span>
+      <PublicLayout onAuthClick={() => navigate("/auth")}> 
+        <div className="space-y-6">
+          <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
+            <h2 className="text-2xl font-extrabold text-gray-900">Trabajos agrícolas disponibles</h2>
+            <p className="text-sm text-gray-500 mt-2">
+              Explora ofertas reales y crea tu cuenta para postular.
+            </p>
+          </div>
+          {jobIdMatch && selectedJob ? (
+            <JobDetailPublic job={selectedJob} />
+          ) : (
+            <div className="grid gap-4">
+              {visibleJobs.map((job) => (
+                <JobCardPublic key={`${job.companyId}-${job.id}`} job={job} onSelect={() => navigate(`/trabajos/${job.id}`)} />
+              ))}
             </div>
-          )) : (
-            <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-gray-200 text-gray-400 text-sm italic font-medium">No has postulado a ninguna oferta todavía.</div>
           )}
         </div>
-
-        <button onClick={() => {
-            localStorage.removeItem(SESSION_KEY);
-            setIsLoggedIn(false);
-            setCurrentUser(null);
-            onLogout();
-        }} className="w-full py-4 text-red-500 font-black uppercase tracking-widest text-xs flex items-center justify-center gap-2 border-2 border-red-50 rounded-2xl hover:bg-red-50 transition-colors mt-8"><LogOut size={18}/> Cerrar Sesión</button>
-      </div>
+        <RegisterCTASticky onClick={() => navigate("/auth")} />
+      </PublicLayout>
     );
-  };
+  }
 
   return (
-    <div className="max-w-md mx-auto bg-gray-50 min-h-screen relative flex flex-col shadow-2xl overflow-hidden font-sans">
-      <div className="bg-white px-4 py-4 border-b border-gray-100 flex justify-between items-center shrink-0 sticky top-0 z-40">
-        <h1 className="font-black italic text-emerald-800 tracking-tighter text-xl">AgroConnect <span className="text-emerald-500 font-normal not-italic">Chile</span></h1>
-        {isLoggedIn && <div className="w-9 h-9 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-700 border-2 border-emerald-200 shadow-sm"><User size={18}/></div>}
+    <PublicLayout onAuthClick={() => navigate("/auth")}> 
+      <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm text-center">
+        <Briefcase size={32} className="text-emerald-600 mx-auto" />
+        <h2 className="text-xl font-extrabold text-gray-900 mt-4">Portal Trabajador</h2>
+        <p className="text-sm text-gray-500 mt-2">Accede a las ofertas en /trabajos para comenzar.</p>
+        <button
+          onClick={() => navigate("/trabajos")}
+          className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-600 text-white text-xs font-black uppercase tracking-widest"
+        >
+          Ver trabajos
+        </button>
       </div>
-
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
-        {activeTab === WorkerTab.JOBS ? renderJobsTab() : renderProfileTab()}
-      </div>
-
-      {isLoggedIn && (
-        <div className="bg-white border-t px-6 py-3 flex justify-around items-center shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] rounded-t-3xl sticky bottom-0 z-40">
-            <button onClick={() => setActiveTab(WorkerTab.JOBS)} className={`flex flex-col items-center gap-1 transition-all p-2 rounded-xl ${activeTab === WorkerTab.JOBS ? 'text-emerald-600 bg-emerald-50 scale-110' : 'text-gray-300'}`}><Briefcase size={22} className={activeTab === WorkerTab.JOBS ? 'fill-emerald-600/10' : ''}/><span className="text-[9px] font-black uppercase tracking-widest">Ofertas</span></button>
-            <button onClick={() => setActiveTab(WorkerTab.PROFILE)} className={`flex flex-col items-center gap-1 transition-all p-2 rounded-xl ${activeTab === WorkerTab.PROFILE ? 'text-emerald-600 bg-emerald-50 scale-110' : 'text-gray-300'}`}><User size={22} className={activeTab === WorkerTab.PROFILE ? 'fill-emerald-600/10' : ''}/><span className="text-[9px] font-black uppercase tracking-widest">Mi Perfil</span></button>
-        </div>
-      )}
-
-      {showFullTerms && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-sm max-h-[80vh] flex flex-col shadow-2xl overflow-hidden border border-white/20">
-            <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50/50">
-               <div>
-                 <h3 className="font-black text-gray-800 uppercase tracking-tighter italic text-sm">Términos Detallados</h3>
-                 <p className="text-[9px] text-gray-400 font-bold uppercase mt-1">Versión Legal AgroConnect 1.0</p>
-               </div>
-               <button onClick={() => setShowFullTerms(false)} className="bg-white p-2 rounded-full shadow-sm text-gray-400 hover:text-gray-600 transition-colors"><X size={20}/></button>
-            </div>
-            <div className="overflow-y-auto p-6 space-y-5 text-xs text-gray-600 leading-relaxed font-medium">
-               {LEGAL_CONTENT.legal.documents.full_terms_and_privacy.sections.map(s => <div key={s.id} className="border-l-2 border-emerald-500 pl-4"><p className="font-black text-gray-800 uppercase text-[10px] mb-1 tracking-widest">{s.title}</p><p className="italic">{s.body}</p></div>)}
-            </div>
-            <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-center rounded-b-[2.5rem]">
-              <button onClick={() => setShowFullTerms(false)} className="bg-emerald-600 text-white px-10 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-emerald-500/20 active:scale-95 transition-transform">Entendido</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    </PublicLayout>
   );
 };
 

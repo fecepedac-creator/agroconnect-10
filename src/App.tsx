@@ -29,7 +29,6 @@ import Jobs from "./components/Jobs";
 import AdminPanel from "./components/AdminPanel";
 import AIReview from "./components/AIReview";
 import WorkerPortal from "./components/WorkerPortal";
-import WorkerAuthScreen from "./components/WorkerAuthScreen";
 import LoginScreen from "./components/LoginScreen";
 import GlobalSearch from "./components/GlobalSearch";
 import CompanySettings from "./components/CompanySettings";
@@ -54,7 +53,6 @@ const App: React.FC = () => {
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isWorkerAuthenticated, setIsWorkerAuthenticated] = useState(false);
 
   // Demo Mode State (usado por AdminPanel)
   const [isDemoMode, setIsDemoMode] = useState(false);
@@ -96,9 +94,7 @@ const App: React.FC = () => {
     }
 
     if (role === UserRole.WORKER) {
-      setCurrentCompany(null);
-      setIsWorkerAuthenticated(false);
-      setCurrentView(AppView.WORKER_PORTAL);
+      window.location.assign("/trabajos");
       return;
     }
   };
@@ -126,10 +122,14 @@ const App: React.FC = () => {
   const handleLogout = () => {
     setUserRole(null);
     setCurrentCompany(null);
-    setIsWorkerAuthenticated(false);
     setCurrentView(AppView.DASHBOARD);
     setIsSidebarOpen(false);
   };
+
+  const isWorkerPortalRoute = /^\/(trabajos|worker|auth)(\/|$)/.test(window.location.pathname);
+  if (isWorkerPortalRoute) {
+    return <WorkerPortal onExit={handleLogout} />;
+  }
 
   useEffect(() => {
     const loadAdminConfig = async () => {
@@ -296,12 +296,7 @@ const App: React.FC = () => {
           {currentView === AppView.AI_REVIEW && <AIReview workers={workers} jobs={jobs} companies={companies} />}
 
           {/* WORKER */}
-          {currentView === AppView.WORKER_PORTAL &&
-            (isWorkerAuthenticated ? (
-              <WorkerPortal jobs={jobs} onLogout={handleLogout} />
-            ) : (
-              <WorkerAuthScreen onSuccess={() => setIsWorkerAuthenticated(true)} onBack={handleLogout} />
-            ))}
+          {currentView === AppView.WORKER_PORTAL && <WorkerPortal onExit={handleLogout} />}
         </div>
       </main>
     </div>
