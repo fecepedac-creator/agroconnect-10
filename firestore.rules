@@ -1,18 +1,254 @@
-rules_version='2'
+rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    /* ======================
+       Helpers básicos
+       ====================== */
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function myUid() {
+      return request.auth.uid;
+    }
+
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function myUser() {
+      return userDoc(myUid());
+    }
+
+    function myRole() {
+      return signedIn()
+        && myUser().exists
+        && myUser().data.role != null
+          ? myUser().data.role
+          : "none";
+    }
+
+    function userAccessDoc() {
+      return get(/databases/$(database)/documents/userAccess/$(request.auth.uid));
+    }
+
+    function userAccessRole() {
+      return exists(/databases/$(database)/documents/userAccess/$(request.auth.uid))
+        && userAccessDoc().data.role != null
+          ? userAccessDoc().data.role
+          : "none";
+    }
+
+    /* ======================
+       SUPER ADMIN
+       ====================== */
+
+    function isSuperAdmin() {
+      return signedIn()
+        && (
+          request.auth.token.admin == true
+          || request.auth.token.superadmin == true
+          || request.auth.token.role == "ADMIN"
+          || request.auth.token.role == "admin"
+          || request.auth.token.role == "SUPERADMIN"
+          || request.auth.token.role == "superadmin"
+          || [
+            "fecepedac@gmail.com",
+            "fecepedac@hospitaldetalca.cl",
+            "fecepedac@hotmail.com",
+            "administracion@agroconnecto.cl"
+          ].hasAny([request.auth.token.email])
+          || myRole() == "superadmin"
+          || userAccessRole() == "ADMIN"
+          || userAccessRole() == "admin"
+        );
+    }
+
+    function isWorker() {
+      return signedIn() && myRole() == "worker";
+    }
+
+    function isCompany() {
+      return signedIn()
+        && (myRole() == "company_admin" || myRole() == "company_hr");
+    }
+
+    function myCompanyId() {
+      return signedIn() && myUser().data.companyId != null
+        ? myUser().data.companyId
+        : null;
+    }
+
+    function isMyCompany(companyId) {
+      return isCompany() && myCompanyId() == companyId;
+    }
+
+    /* ======================
+       Seguridad updates empresa
+       ====================== */
+
+    function companyUpdateKeepsCriticalFields() {
+      return request.resource.data.adminEmail == resource.data.adminEmail
+        && request.resource.data.rut == resource.data.rut
+        && request.resource.data.subscriptionPlan == resource.data.subscriptionPlan
+        && request.resource.data.status == resource.data.status;
+    }
+
+    /* ======================
+       USERS
+       ====================== */
+
+    match /users/{uid} {
+      allow read: if signedIn() && uid == myUid();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    /* ======================
+       PUBLIC
+       ====================== */
+
+    match /publicCompanies/{companyId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /publicJobs/{jobId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /publicWorkers/{workerId} {
+      allow read: if isSuperAdmin()
+                  || isCompany()
+                  || (signedIn() && workerId == myUid());
+      allow write: if isSuperAdmin();
+    }
+
+    /* ======================
+       WORKERS
+       ====================== */
+
+    match /workers/{uid} {
+      allow read, create, update: if signedIn() && uid == myUid();
+      allow delete: if false;
+    }
+
+    /* ======================
+       COMPANIES
+       ====================== */
+
+    match /companies/{companyId} {
+
+      allow read: if isSuperAdmin() || isMyCompany(companyId);
+      allow create: if isSuperAdmin();
+
+      allow update: if isSuperAdmin()
+        || (isMyCompany(companyId) && companyUpdateKeepsCriticalFields());
+
+      allow delete: if isSuperAdmin();
+
+      /* ----- JOBS ----- */
+      match /jobs/{jobId} {
+
+        allow read: if isSuperAdmin()
+                    || isMyCompany(companyId)
+                    || isWorker();
+
+        allow create, update: if isSuperAdmin() || isMyCompany(companyId);
+        allow delete: if isSuperAdmin();
+
+        /* ----- APPLICATIONS ----- */
+        match /applications/{appId} {
+
+          allow read: if isSuperAdmin()
+                      || isMyCompany(companyId)
+                      || (isWorker()
+                          && request.auth.uid == resource.data.workerId);
+
+          allow create: if isWorker()
+                        && request.resource.data.workerId == myUid();
+
+          allow update: if isSuperAdmin()
+                        || isMyCompany(companyId)
+                        || (isWorker()
+                            && request.auth.uid == resource.data.workerId);
+
+          allow delete: if isSuperAdmin();
+        }
+
+        /* ----- ATTENDANCE ----- */
+        match /attendance/{shiftId} {
+
+          allow read: if isSuperAdmin()
+                      || isMyCompany(companyId)
+                      || isWorker();
+
+          match /entries/{workerId} {
+
+            allow read: if isSuperAdmin()
+                        || isMyCompany(companyId)
+                        || (isWorker() && workerId == myUid());
+
+            allow create, update: if isSuperAdmin()
+                                  || isMyCompany(companyId)
+                                  || (isWorker() && workerId == myUid());
+
+            allow delete: if isSuperAdmin();
+          }
+        }
+      }
+    }
+
+    /* ======================
+       STATS / FINOPS
+       ====================== */
+
+    match /stats/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /stats_monthly/{ym} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /stats_companies/{companyId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /finops_infra/{ym} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /finops_manualExpenses/{expenseId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    /* ======================
+       MENSAJERÍA / EMAIL
+       ====================== */
+
+    // Cola de mensajes (UI → Function / Trigger Email)
+    match /comms_outbox/{docId} {
+      allow create: if isSuperAdmin();
+      allow read: if isSuperAdmin(); // solo auditoría
+      allow update, delete: if false;
+    }
+
+    // Colección mail (si usas Firebase Trigger Email)
+    match /mail/{mailId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    /* ======================
+       DEFAULT DENY
+       ====================== */
+
     match /{document=**} {
-      // This rule allows anyone with your database reference to view, edit,
-      // and delete all data in your database. It is useful for getting
-      // started, but it is configured to expire after 30 days because it
-      // leaves your app open to attackers. At that time, all client
-      // requests to your database will be denied.
-      //
-      // Make sure to write security rules for your app before that time, or
-      // else all client requests to your database will be denied until you
-      // update your rules.
-      allow read, write: if request.time < timestamp.date(2026, 2, 2);
+      allow read, write: if false;
     }
   }
 }

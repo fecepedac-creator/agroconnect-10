@@ -1,471 +1,2373 @@
-
-import React, { useState, useEffect } from 'react';
-import { Company, Lead, AdminConfig } from '../types';
-import { 
-  Building2, 
-  CreditCard, 
-  MoreVertical, 
-  Plus, 
-  TrendingUp, 
-  Users, 
-  User,
-  Activity, 
-  AlertCircle, 
-  DollarSign, 
-  Server,
-  Search,
-  Download,
-  X,
-  FileText,
-  Upload,
-  Save,
-  ShieldAlert,
-  CheckCircle,
-  Phone,
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  updateDoc,
+  Timestamp,
+} from "firebase/firestore";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import { db, auth } from "../firebase";
+import {
+  AlertTriangle,
+  Briefcase,
+  Building2,
+  DollarSign,
+  Leaf,
   Mail,
-  MapPin,
-  ImageIcon,
-  Inbox,
-  Settings,
-  Check,
-  MessageSquare,
-  Zap
-} from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+  TrendingUp,
+  Users,
+} from "lucide-react";
 
-interface CompanyDetails extends Company {
-  rut: string;
-  address: string;
-  hrContact: string;
-  phone: string;
-  logoUrl?: string;
-  bankInfo: string;
-  paymentStatusHistory: string[];
-  usageStats: {
-    jobsPosted: number;
-    jobsLimit: number;
-    workersContacted: number;
-    workersLimit: number;
-  };
-  adminNotes: string;
-  documents:Array<{name: string, type: string, date: string}>;
-}
+/**
+ * AdminPanel (SuperAdmin Dashboard)
+ *
+ * ✅ No rompe la arquitectura actual (App.tsx usa tabs + props).
+ * ✅ Firestore = fuente única de verdad.
+ * ✅ Métricas pesadas desde colecciones agregadas:
+ *    - stats/global (doc)
+ *    - stats_monthly/{YYYY-MM}
+ *    - stats_companies/{companyId}
+ * ✅ FinOps:
+ *    - finops_infra/{YYYY-MM}
+ *    - finops_manualExpenses/{expenseId}
+ */
 
-interface AdminPanelProps {
-  companies?: Company[];
-  setCompanies?: React.Dispatch<React.SetStateAction<Company[]>>;
+type SubscriptionPlan = "Basic" | "Pro" | "Enterprise";
+type CompanyStatus = "Active" | "Pending" | "Suspended" | "Overdue";
+
+type Address = {
+  line1?: string;
+  city?: string | null;
+  region?: string | null;
+  country?: string | null;
+};
+
+export type CompanyDoc = {
+  name: string;
+  rut?: string | null;
+  industry?: string | null;
+  description?: string | null;
+  website?: string | null;
+  billingEmail?: string | null;
+  legalName?: string | null;
+  tags?: string[];
+
+  contactEmail?: string | null;
+  phone?: string | null;
+
+  address?: Address;
+
+  adminEmail: string;
+  subscriptionPlan?: SubscriptionPlan;
+  status?: CompanyStatus;
+
+  createdBy?: { uid?: string; email?: string | null };
+  createdAt?: any;
+  updatedAt?: any;
+};
+
+type CompanyRow = {
+  id: string;
+  name: string;
+  subscriptionPlan?: SubscriptionPlan;
+  status?: CompanyStatus;
+  contactEmail?: string | null;
+  adminEmail: string;
+  rut?: string | null;
+  industry?: string | null;
+  region?: string | null;
+  city?: string | null;
+};
+
+type Lead = any;
+type AdminConfig = any;
+
+type AdminPanelProps = {
+  companies: any[];
+  setCompanies: React.Dispatch<React.SetStateAction<any[]>>;
   leads: Lead[];
   setLeads: React.Dispatch<React.SetStateAction<Lead[]>>;
   adminConfig: AdminConfig;
   setAdminConfig: React.Dispatch<React.SetStateAction<AdminConfig>>;
-  activeTab: 'OVERVIEW' | 'COMPANIES' | 'REQUESTS' | 'SETTINGS';
-  setActiveTab: (tab: 'OVERVIEW' | 'COMPANIES' | 'REQUESTS' | 'SETTINGS') => void;
-  isDemoMode?: boolean;
-  onToggleDemo?: (enabled: boolean) => void;
+  activeTab: "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
+  setActiveTab: React.Dispatch<
+    React.SetStateAction<"OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS">
+  >;
+  isDemoMode: boolean;
+  onToggleDemo: (v: boolean) => void;
+  onBack?: () => void;
+};
+
+type GlobalStatsDoc = {
+  companiesTotal?: number;
+  companiesActive?: number;
+  companiesOverdue?: number;
+  companiesSuspended?: number;
+  jobsTotal?: number;
+  jobsActive?: number;
+  jobsFuture?: number;
+  jobsClosed?: number;
+  applicationsTotal?: number;
+  hiresTotal?: number;
+  workersTotal?: number; // si existe en el futuro
+  updatedAt?: any;
+};
+
+type MonthlyStatsDoc = {
+  ym: string; // YYYY-MM
+  jobsCreated?: number;
+  applicationsCreated?: number;
+  hiresCreated?: number;
+  updatedAt?: any;
+};
+
+type CompanyStatsDoc = {
+  companyId: string;
+  jobsTotal?: number;
+  jobsActive?: number;
+  jobsFuture?: number;
+  jobsClosed?: number;
+  applicationsTotal?: number;
+  hiresTotal?: number;
+  lastJobAt?: any;
+  lastApplicationAt?: any;
+  updatedAt?: any;
+};
+
+type InfraFinOpsDoc = {
+  ym: string;
+  firestoreReads?: number;
+  firestoreWrites?: number;
+  firestoreDeletes?: number;
+  storageGB?: number;
+  functionsInvocations?: number;
+  notes?: string;
+  updatedAt?: any;
+};
+
+type ManualExpenseDoc = {
+  category: "Personal" | "Marketing" | "Servicios" | "Licencias" | "Otros";
+  vendor?: string;
+  amount: number;
+  currency: "CLP" | "USD";
+  startMonth: string; // YYYY-MM
+  recurrence: "once" | "monthly";
+  months?: number; // si recurrence=monthly (por defecto 1)
+  note?: string;
+  createdAt?: any;
+  createdBy?: { uid?: string; email?: string | null };
+};
+
+type BillingRecordDoc = {
+  type: "invoice" | "payment";
+  amount: number;
+  currency: "CLP" | "USD";
+  issueDate?: string; // YYYY-MM-DD
+  dueDate?: string; // YYYY-MM-DD
+  paidDate?: string; // YYYY-MM-DD
+  status: "paid" | "unpaid" | "overdue";
+  invoiceNumber?: string;
+  note?: string;
+  createdAt?: any;
+  createdBy?: { uid?: string; email?: string | null };
+};
+
+type CommsOutboxDoc = {
+  companyId: string;
+  to: string;
+  templateKey: "overdue" | "suspension" | "low_activity" | "holiday" | "custom";
+  /** Remitente deseado (para proveedores tipo SendGrid/Mailgun). */
+  fromEmail?: string;
+  /** Reply-To recomendado: correo del superadmin para que respondan directo. */
+  replyTo?: string | null;
+  subject: string;
+  text: string;
+  status: "queued" | "sent" | "error";
+  createdAt?: any;
+  createdBy?: { uid?: string; email?: string | null };
+  errorMessage?: string;
+};
+
+// --------- Helpers UI ---------
+const inputBase =
+  "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-400";
+const labelBase = "text-xs font-semibold text-gray-600";
+const helpBase = "mt-1 text-[11px] text-gray-500";
+
+function Badge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-700">
+      {children}
+    </span>
+  );
 }
 
-const AdminPanel: React.FC<AdminPanelProps> = ({ 
-  companies = [], 
-  setCompanies, 
-  leads, 
-  setLeads, 
-  adminConfig, 
-  setAdminConfig,
-  activeTab,
-  setActiveTab,
-  isDemoMode = false,
-  onToggleDemo
-}) => {
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
-  const [companyDetails, setCompanyDetails] = useState<CompanyDetails | null>(null);
-  const [tempConfig, setTempConfig] = useState<AdminConfig>(adminConfig);
 
-  useEffect(() => {
-    setTempConfig(adminConfig);
-  }, [activeTab, adminConfig]);
+function statusLabel(s?: CompanyStatus) {
+  switch (s) {
+    case "Overdue":
+      return "Morosa";
+    case "Suspended":
+      return "Suspendida";
+    case "Pending":
+      return "Pendiente";
+    case "Active":
+    default:
+      return "Pagos al día";
+  }
+}
 
-  const data = [
-    { name: 'Ene', empresas: 2, ingresos: 2400 },
-    { name: 'Feb', empresas: 3, ingresos: 3600 },
-    { name: 'Mar', empresas: 3, ingresos: 3600 },
-    { name: 'Abr', empresas: 5, ingresos: 6000 },
-    { name: 'May', empresas: 8, ingresos: 9600 },
-    { name: 'Jun', empresas: 12, ingresos: 14400 },
+function statusPillClasses(s?: CompanyStatus) {
+  switch (s) {
+    case "Overdue":
+      return "border-red-300 bg-red-100 text-red-800 font-semibold";
+    case "Suspended":
+      return "border-gray-300 bg-gray-100 text-gray-700";
+    case "Pending":
+      return "border-amber-200 bg-amber-50 text-amber-800";
+    case "Active":
+    default:
+      return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+}
+
+function StatusBadge({ status }: { status?: CompanyStatus }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${statusPillClasses(
+        status
+      )}`}
+      title={status || "Active"}
+    >
+      {statusLabel(status)}
+    </span>
+  );
+}
+
+function KpiCard({
+  title,
+  value,
+  subtitle,
+}: {
+  title: string;
+  value: React.ReactNode;
+  subtitle?: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+      <div className="text-xs font-semibold text-gray-500">{title}</div>
+      <div className="mt-1 text-2xl font-extrabold text-gray-900">{value}</div>
+      {subtitle ? <div className="mt-1 text-xs text-gray-600">{subtitle}</div> : null}
+    </div>
+  );
+}
+
+function ymNow(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
+function ymLabel(ym: string) {
+  const [y, m] = ym.split("-");
+  const mm = parseInt(m, 10);
+  const names = [
+    "Ene",
+    "Feb",
+    "Mar",
+    "Abr",
+    "May",
+    "Jun",
+    "Jul",
+    "Ago",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dic",
   ];
+  return `${names[Math.max(0, Math.min(11, mm - 1))]} ${y}`;
+}
+
+function clampInt(n: any, fallback = 0): number {
+  const x = Number(n);
+  return Number.isFinite(x) ? Math.trunc(x) : fallback;
+}
+
+function isPlainObject(v: any) {
+  return (
+    v !== null &&
+    typeof v === "object" &&
+    (v.constructor === Object || Object.getPrototypeOf(v) === Object.prototype)
+  );
+}
+
+function stripUndefinedDeep<T>(input: T): T {
+  if (Array.isArray(input)) return input.map(stripUndefinedDeep) as any;
+  if (!isPlainObject(input)) return input;
+
+  const out: any = {};
+  for (const [k, v] of Object.entries(input as any)) {
+    if (v === undefined) continue;
+    out[k] = stripUndefinedDeep(v as any);
+  }
+  return out as T;
+}
+
+function normalizeTags(input: string): string[] {
+  return (input || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function normalizePhoneCL(input: string): string {
+  const raw = (input || "").trim();
+  if (!raw) return "";
+  let cleaned = raw.replace(/[^\d+]/g, "");
+  if (/^56\d{8,9}$/.test(cleaned)) cleaned = "+" + cleaned;
+  if (/^9\d{8}$/.test(cleaned)) cleaned = "+56" + cleaned;
+  return cleaned;
+}
+
+function isValidRutFormat(rut: string): boolean {
+  const r = (rut || "").trim();
+  if (!r) return true;
+  return /^\d{1,2}\.?\d{3}\.?\d{3}-[\dkK]$/.test(r) || /^\d{7,8}-[\dkK]$/.test(r);
+}
+
+function isValidEmail(email: string): boolean {
+  const e = (email || "").trim();
+  if (!e) return true;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+}
+
+// --------- Main component ---------
+export default function AdminPanel(props: AdminPanelProps) {
+  const { activeTab, setActiveTab } = props;
+
+  const [me, setMe] = useState<User | null>(null);
+
+  // Companies list for Admin CRUD
+  const [companies, setCompanies] = useState<CompanyRow[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(true);
+
+  // Selected company + stats
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
+  const [selectedCompanyDoc, setSelectedCompanyDoc] = useState<CompanyDoc | null>(null);
+  const [selectedCompanyStats, setSelectedCompanyStats] = useState<CompanyStatsDoc | null>(null);
+  const [selectedCompanyLoading, setSelectedCompanyLoading] = useState(false);
+
+  // Company billing history (facturas/pagos)
+  const [billingRecords, setBillingRecords] = useState<(BillingRecordDoc & { id: string })[]>([]);
+  const [loadingBilling, setLoadingBilling] = useState(false);
+
+  // Billing record modal
+  const [billingModalOpen, setBillingModalOpen] = useState(false);
+  const [billingType, setBillingType] = useState<BillingRecordDoc["type"]>("invoice");
+  const [billingAmount, setBillingAmount] = useState<string>("");
+  const [billingCurrency, setBillingCurrency] = useState<BillingRecordDoc["currency"]>("CLP");
+  const [billingIssueDate, setBillingIssueDate] = useState<string>("");
+  const [billingDueDate, setBillingDueDate] = useState<string>("");
+  const [billingPaidDate, setBillingPaidDate] = useState<string>("");
+  const [billingInvoiceNumber, setBillingInvoiceNumber] = useState<string>("");
+  const [billingNote, setBillingNote] = useState<string>("");
+  const [billingSaving, setBillingSaving] = useState(false);
+
+  // Comms (outbox) modal
+  const [commsModalOpen, setCommsModalOpen] = useState(false);
+
+  const BRAND_FROM_EMAIL = "administracion@agroconnecto.cl";
+  const [commsFromMode, setCommsFromMode] = useState<"brand" | "me">("brand");
+  const [commsTemplate, setCommsTemplate] = useState<CommsOutboxDoc["templateKey"]>("overdue");
+  const [commsQuickTemplate, setCommsQuickTemplate] = useState<CommsOutboxDoc["templateKey"]>("overdue");
+  const [commsSubject, setCommsSubject] = useState<string>("");
+  const [commsText, setCommsText] = useState<string>("");
+  const [commsSending, setCommsSending] = useState(false);
+
+  // Search
+  const [search, setSearch] = useState("");
+
+  // Global stats + monthly
+  const [globalStats, setGlobalStats] = useState<GlobalStatsDoc | null>(null);
+  const [monthlyStats, setMonthlyStats] = useState<MonthlyStatsDoc[]>([]);
+  const [selectedYm, setSelectedYm] = useState<string>(ymNow());
+
+  // FinOps: infra + manual expenses
+  const [infra, setInfra] = useState<InfraFinOpsDoc | null>(null);
+  const [manualExpenses, setManualExpenses] = useState<(ManualExpenseDoc & { id: string })[]>([]);
+
+  // Manual expense form
+  const [expCategory, setExpCategory] = useState<ManualExpenseDoc["category"]>("Marketing");
+  const [expVendor, setExpVendor] = useState("");
+  const [expAmount, setExpAmount] = useState<string>("");
+  const [expCurrency, setExpCurrency] = useState<ManualExpenseDoc["currency"]>("CLP");
+  const [expStartMonth, setExpStartMonth] = useState<string>(ymNow());
+  const [expRecurrence, setExpRecurrence] = useState<ManualExpenseDoc["recurrence"]>("once");
+  const [expMonths, setExpMonths] = useState<string>("1");
+  const [expNote, setExpNote] = useState("");
+
+  // Infra form (editable)
+  const [infraReads, setInfraReads] = useState<string>("");
+  const [infraWrites, setInfraWrites] = useState<string>("");
+  const [infraDeletes, setInfraDeletes] = useState<string>("");
+  const [infraStorage, setInfraStorage] = useState<string>("");
+  const [infraFnInv, setInfraFnInv] = useState<string>("");
+  const [infraNotes, setInfraNotes] = useState<string>("");
+
+  // Company create/edit modal (reusa MVP)
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"create" | "edit">("create");
+  const [saving, setSaving] = useState(false);
+
+  const [name, setName] = useState("");
+  const [rut, setRut] = useState("");
+  const [industry, setIndustry] = useState("");
+  const [description, setDescription] = useState("");
+  const [website, setWebsite] = useState("");
+  const [billingEmail, setBillingEmail] = useState("");
+  const [legalName, setLegalName] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
+
+  const [contactEmail, setContactEmail] = useState("");
+  const [phone, setPhone] = useState("");
+
+  const [addressLine1, setAddressLine1] = useState("");
+  const [city, setCity] = useState("");
+  const [region, setRegion] = useState("Maule");
+
+  const [adminEmail, setAdminEmail] = useState("");
+  const [plan, setPlan] = useState<SubscriptionPlan>("Basic");
+  const [status, setStatus] = useState<CompanyStatus>("Active");
 
   useEffect(() => {
-    if (selectedCompanyId) {
-      const baseCompany = companies.find(c => c.id === selectedCompanyId);
-      if (baseCompany) {
-        setCompanyDetails(prev => {
-           if (prev && prev.id === baseCompany.id) {
-             return { ...prev, ...baseCompany };
-           }
-           return {
-            ...baseCompany,
-            rut: '76.123.456-7',
-            address: 'Camino Longitudinal Sur Km 125, Maule',
-            hrContact: 'Marcela Silva',
-            phone: '+56 9 8765 4321',
-            bankInfo: 'Banco Santander - Cta Cte 12345678',
-            paymentStatusHistory: ['Paid', 'Paid', 'Paid', 'Pending'],
-            usageStats: {
-              jobsPosted: baseCompany.subscriptionPlan === 'Enterprise' ? 12 : 3,
-              jobsLimit: baseCompany.subscriptionPlan === 'Enterprise' ? 50 : 5,
-              workersContacted: 145,
-              workersLimit: baseCompany.subscriptionPlan === 'Enterprise' ? 1000 : 200,
-            },
-            adminNotes: 'Cliente solicita ampliación de cupo para temporada de cerezas en Noviembre.',
-            documents: [
-              { name: 'Contrato_Prestacion_Servicios.pdf', type: 'PDF', date: '2023-01-15' },
-              { name: 'Factura_Octubre_2023.pdf', type: 'PDF', date: '2023-10-30' },
-            ]
+    const unsub = onAuthStateChanged(auth, (u) => setMe(u));
+    return () => unsub();
+  }, []);
+
+  // --------- Firestore subscriptions ---------
+  useEffect(() => {
+    setLoadingCompanies(true);
+    const q = query(collection(db, "companies"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows: CompanyRow[] = snap.docs.map((d) => {
+          const data = d.data() as CompanyDoc;
+          return {
+            id: d.id,
+            name: data.name || "(sin nombre)",
+            subscriptionPlan: (data.subscriptionPlan || "Basic") as SubscriptionPlan,
+            status: (data.status || "Active") as CompanyStatus,
+            contactEmail: data.contactEmail || "",
+            adminEmail: data.adminEmail || "",
+            rut: data.rut || "",
+            industry: data.industry || "",
+            region: (data.address?.region as any) || null,
+            city: (data.address?.city as any) || null,
           };
         });
+        setCompanies(rows);
+        setLoadingCompanies(false);
+      },
+      (err) => {
+        console.error("onSnapshot companies error:", err);
+        setLoadingCompanies(false);
       }
-    } else {
-      setCompanyDetails(null);
+    );
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const ref = doc(db, "stats", "global");
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setGlobalStats((snap.data() as any) || null),
+      (err) => console.error("stats/global error:", err)
+    );
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, "stats_monthly"), orderBy("ym", "asc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ ...(d.data() as any) })) as MonthlyStatsDoc[];
+        setMonthlyStats(list);
+        if (!list.find((x) => x.ym === selectedYm) && list.length) {
+          setSelectedYm(list[list.length - 1].ym);
+        }
+      },
+      (err) => console.error("stats_monthly error:", err)
+    );
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // Infra per selected month
+    const ref = doc(db, "finops_infra", selectedYm);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const d = snap.exists() ? (snap.data() as any as InfraFinOpsDoc) : null;
+        setInfra(d);
+        setInfraReads(d?.firestoreReads != null ? String(d.firestoreReads) : "");
+        setInfraWrites(d?.firestoreWrites != null ? String(d.firestoreWrites) : "");
+        setInfraDeletes(d?.firestoreDeletes != null ? String(d.firestoreDeletes) : "");
+        setInfraStorage(d?.storageGB != null ? String(d.storageGB) : "");
+        setInfraFnInv(d?.functionsInvocations != null ? String(d.functionsInvocations) : "");
+        setInfraNotes(d?.notes || "");
+      },
+      (err) => console.error("finops_infra error:", err)
+    );
+    return () => unsub();
+  }, [selectedYm]);
+
+  useEffect(() => {
+    // Manual expenses (global)
+    const q = query(collection(db, "finops_manualExpenses"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        setManualExpenses(list as any);
+      },
+      (err) => console.error("finops_manualExpenses error:", err)
+    );
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setSelectedCompanyStats(null);
+      return;
     }
-  }, [selectedCompanyId, companies]);
+    const ref = doc(db, "stats_companies", selectedCompanyId);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setSelectedCompanyStats((snap.data() as any) || null),
+      (err) => console.error("stats_companies error:", err)
+    );
+    return () => unsub();
+  }, [selectedCompanyId]);
 
-  const handleCloseDetails = () => setSelectedCompanyId(null);
-  const handleLogoUpload = () => alert("Simulación: Se abriría el explorador de archivos para subir el logo.");
-
-  const toggleCompanyStatus = () => {
-    if (!companyDetails || !setCompanies) return;
-    const newStatus = companyDetails.status === 'Active' ? 'Overdue' : 'Active';
-    setCompanies(prev => prev.map(c => c.id === companyDetails.id ? { ...c, status: newStatus } : c));
-  };
-
-  const handleApproveLead = (lead: Lead) => {
-    if(!setCompanies) return;
-    if(confirm(`¿Estás seguro de crear la cuenta para ${lead.companyName}?`)) {
-      const newCompany: Company = {
-        id: `c-${Date.now()}`,
-        name: lead.companyName,
-        subscriptionPlan: 'Basic',
-        status: 'Active',
-        contactEmail: lead.email,
-        logoUrl: undefined
-      };
-      setCompanies(prev => [newCompany, ...prev]);
-      setLeads(prev => prev.filter(l => l.id !== lead.id));
-      alert(`✅ Cuenta creada para ${lead.companyName}.\n\nContraseña temporal generada: empresa123\n\nSe ha enviado un correo automático a ${lead.email} con las credenciales.`);
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setBillingRecords([]);
+      setLoadingBilling(false);
+      return;
     }
-  };
+    setLoadingBilling(true);
+    const qBilling = query(
+      collection(db, "companies", selectedCompanyId, "billing"),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    );
+    const unsub = onSnapshot(
+      qBilling,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as any;
+        setBillingRecords(list);
+        setLoadingBilling(false);
+      },
+      (err) => {
+        console.error("billing error:", err);
+        setLoadingBilling(false);
+      }
+    );
+    return () => unsub();
+  }, [selectedCompanyId]);
 
-  const handleSaveConfig = () => {
-    setAdminConfig(tempConfig);
-    alert("Configuración guardada correctamente.");
-  };
+  // --------- Derived data ---------
+  const filteredCompanies = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    if (!s) return companies;
+    return companies.filter((c) => {
+      return (
+        c.name.toLowerCase().includes(s) ||
+        (c.rut || "").toLowerCase().includes(s) ||
+        (c.adminEmail || "").toLowerCase().includes(s) ||
+        (c.contactEmail || "").toLowerCase().includes(s) ||
+        (c.industry || "").toLowerCase().includes(s) ||
+        (c.region || "").toLowerCase().includes(s) ||
+        (c.city || "").toLowerCase().includes(s)
+      );
+    });
+  }, [companies, search]);
 
-  const renderOverview = () => (
-    <div className="space-y-6 animate-fade-in">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Ingresos Mensuales</p>
-              <h3 className="text-2xl font-bold text-gray-800 mt-1">$14.4M</h3>
-            </div>
-            <div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg">
-              <DollarSign size={20} />
-            </div>
-          </div>
-          <div className="mt-4 flex items-center text-xs text-emerald-600 font-medium">
-            <TrendingUp size={14} className="mr-1" /> +12% vs mes anterior
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Empresas Activas</p>
-              <h3 className="text-2xl font-bold text-gray-800 mt-1">{companies.length}</h3>
-            </div>
-            <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
-              <Building2 size={20} />
-            </div>
-          </div>
-          <div className="mt-4 flex items-center text-xs text-blue-600 font-medium">
-            <Plus size={14} className="mr-1" /> 2 nuevas esta semana
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Trabajadores Total</p>
-              <h3 className="text-2xl font-bold text-gray-800 mt-1">{isDemoMode ? '1,240' : '5'}</h3>
-            </div>
-            <div className="p-2 bg-purple-100 text-purple-600 rounded-lg">
-              <Users size={20} />
-            </div>
-          </div>
-           <div className="mt-4 text-xs text-gray-400">En todas las regiones</div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Salud del Sistema</p>
-              <h3 className="text-2xl font-bold text-emerald-600 mt-1">99.9%</h3>
-            </div>
-            <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
-              <Activity size={20} />
-            </div>
-          </div>
-           <div className="mt-4 text-xs text-gray-400">Todos los servicios operativos</div>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <h3 className="font-bold text-gray-800 mb-6">Crecimiento de la Plataforma</h3>
-          <div className="h-72 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data}>
-                <defs>
-                  <linearGradient id="colorIngresos" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.1}/>
-                    <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9CA3AF'}} />
-                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9CA3AF'}} />
-                <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                <Area type="monotone" dataKey="ingresos" stroke="#10B981" strokeWidth={3} fillOpacity={1} fill="url(#colorIngresos)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col">
-          <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-            <Server size={18} className="text-gray-400"/> Logs del Sistema
-          </h3>
-          <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-            <div className="flex gap-3 items-start p-3 bg-red-50 rounded-lg border border-red-100">
-              <AlertCircle size={16} className="text-red-500 mt-1 shrink-0" />
-              <div>
-                <p className="text-xs font-bold text-red-700">Alta Latencia Detectada</p>
-                <p className="text-xs text-red-600 mt-1">Region us-east-1 reporta tiempos &gt; 500ms.</p>                <span className="text-[10px] text-red-400 block mt-2">Hace 12 min</span>
-              </div>
-            </div>
-            <div className="flex gap-3 items-start p-3 bg-gray-50 rounded-lg border border-gray-100">
-              <Activity size={16} className="text-blue-500 mt-1 shrink-0" />
-              <div>
-                <p className="text-xs font-bold text-gray-700">Backup Completado</p>
-                <p className="text-xs text-gray-500 mt-1">Copia de seguridad de BDD exitosa.</p>
-                <span className="text-[10px] text-gray-400 block mt-2">Hace 2 horas</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  const monthDoc = useMemo(() => monthlyStats.find((x) => x.ym === selectedYm) || null, [monthlyStats, selectedYm]);
 
-  const renderRequests = () => (
-    <div className="space-y-6 animate-fade-in">
-       <div className="flex justify-between items-center mb-6">
-          <h3 className="text-xl font-bold text-gray-800">Solicitudes de Incorporación</h3>
-          <div className="bg-white border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-600">
-             Pendientes: <span className="font-bold text-red-600">{leads.length}</span>
-          </div>
-       </div>
-       {leads.length === 0 ? (
-         <div className="text-center py-20 bg-white rounded-xl border border-dashed border-gray-300">
-            <Inbox size={48} className="mx-auto text-gray-300 mb-4" />
-            <h3 className="text-gray-500 font-bold">No hay solicitudes nuevas</h3>
-            <p className="text-gray-400 text-sm">Tu bandeja está al día.</p>
-         </div>
-       ) : (
-         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-           {leads.map(lead => (
-             <div key={lead.id} className="bg-white rounded-xl shadow-md border-l-4 border-blue-500 overflow-hidden hover:shadow-lg transition-shadow">
-               <div className="p-5">
-                 <div className="flex justify-between items-start mb-3">
-                   <div className="bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs font-bold uppercase">Nueva Solicitud</div>
-                   <span className="text-xs text-gray-400">{new Date(lead.timestamp).toLocaleDateString()}</span>
-                 </div>
-                 <h4 className="font-bold text-lg text-gray-900 mb-1">{lead.companyName}</h4>
-                 <div className="flex items-center gap-2 text-sm text-gray-500 mb-3"><User size={14} /> {lead.contactName}</div>
-                 <div className="bg-gray-50 p-3 rounded-lg text-sm text-gray-600 mb-4 italic border border-gray-100">"{lead.message || 'Sin mensaje adicional'}"</div>
-                 <div className="space-y-2 mb-4">
-                   <div className="flex items-center gap-2 text-xs text-gray-500"><Phone size={14} className="text-gray-400"/> {lead.phone}</div>
-                   <div className="flex items-center gap-2 text-xs text-gray-500"><Mail size={14} className="text-gray-400"/> {lead.email}</div>
-                 </div>
-                 <button onClick={() => handleApproveLead(lead)} className="w-full bg-emerald-600 text-white py-2 rounded-lg font-bold hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2 shadow-sm"><CheckCircle size={16} /> Aprobar / Crear Cuenta</button>
-               </div>
-             </div>
-           ))}
-         </div>
-       )}
-    </div>
-  );
+  const effectiveGlobal = useMemo(() => {
+    // Fallback: si stats aún no están creadas, estimar con companies list.
+    const fallbackCompaniesTotal = companies.length;
+    const fallbackActive = companies.filter((c) => (c.status || "Active") === "Active").length;
+    const fallbackOverdue = companies.filter((c) => (c.status || "") === "Overdue").length;
+    const fallbackSuspended = companies.filter((c) => (c.status || "") === "Suspended").length;
 
-  const renderSettings = () => (
-    <div className="max-w-4xl mx-auto animate-fade-in space-y-8">
-       <section>
-          <div className="mb-6">
-             <h3 className="text-xl font-bold text-gray-800">Entorno y Datos</h3>
-             <p className="text-gray-500 text-sm">Configura el comportamiento de la aplicación para demostraciones.</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-             <div className="p-6">
-                <div className={`flex items-start gap-4 p-4 rounded-xl border transition-all ${isDemoMode ? 'bg-amber-50 border-amber-100' : 'bg-gray-50 border-gray-200'}`}>
-                   <div className={`p-3 rounded-full ${isDemoMode ? 'bg-amber-100 text-amber-600' : 'bg-gray-200 text-gray-500'}`}>
-                      <Zap size={24} />
-                   </div>
-                   <div className="flex-1">
-                      <div className="flex justify-between items-center mb-1">
-                         <h4 className="font-bold text-gray-800">Modo Demo / Datos de Prueba</h4>
-                         <label className="relative inline-flex items-center cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              className="sr-only peer" 
-                              checked={isDemoMode}
-                              onChange={(e) => onToggleDemo?.(e.target.checked)}
-                            />
-                            <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
-                         </label>
-                      </div>
-                      <p className="text-sm text-gray-600">
-                        Al activar este modo, la plataforma se precargará con 30 trabajadores de prueba (10 en tu empresa, 10 en otras y 10 libres) para probar flujos de búsqueda y mensajería masiva con volumen real.
-                      </p>
-                      {isDemoMode && (
-                        <div className="mt-2 text-xs font-bold text-amber-700 bg-amber-100/50 inline-block px-2 py-1 rounded">
-                           ⚡ Datos extendidos activos (30 perfiles)
-                        </div>
-                      )}
-                   </div>
-                </div>
-             </div>
-          </div>
-       </section>
+    return {
+      companiesTotal: clampInt(globalStats?.companiesTotal, fallbackCompaniesTotal),
+      companiesActive: clampInt(globalStats?.companiesActive, fallbackActive),
+      companiesOverdue: clampInt(globalStats?.companiesOverdue, fallbackOverdue),
+      companiesSuspended: clampInt(globalStats?.companiesSuspended, fallbackSuspended),
+      jobsTotal: clampInt(globalStats?.jobsTotal, 0),
+      jobsActive: clampInt(globalStats?.jobsActive, 0),
+      jobsFuture: clampInt(globalStats?.jobsFuture, 0),
+      jobsClosed: clampInt(globalStats?.jobsClosed, 0),
+      applicationsTotal: clampInt(globalStats?.applicationsTotal, 0),
+      hiresTotal: clampInt(globalStats?.hiresTotal, 0),
+      workersTotal: clampInt(globalStats?.workersTotal, 0),
+    };
+  }, [globalStats, companies]);
 
-       <section>
-          <div className="mb-6">
-             <h3 className="text-xl font-bold text-gray-800">Configuración de Alertas</h3>
-             <p className="text-gray-500 text-sm">Define a dónde se envían las notificaciones de nuevos clientes.</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-             <div className="p-6 space-y-6">
-                <div className="flex items-start gap-4 p-4 bg-green-50 rounded-xl border border-green-100">
-                   <div className="bg-green-100 p-3 rounded-full text-green-600"><Phone size={24} /></div>
-                   <div className="flex-1">
-                      <h4 className="font-bold text-gray-800 mb-1">WhatsApp Maestro</h4>
-                      <p className="text-sm text-gray-600 mb-3">Número principal para alertas instantáneas de nuevos leads.</p>
-                      <input type="text" className="w-full max-w-md border border-green-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-green-500 outline-none" value={tempConfig.whatsappNumber} onChange={e => setTempConfig({...tempConfig, whatsappNumber: e.target.value})} />
-                   </div>
-                </div>
-                <div className="flex items-start gap-4 p-4 bg-blue-50 rounded-xl border border-blue-100">
-                   <div className="bg-blue-100 p-3 rounded-full text-blue-600"><Mail size={24} /></div>
-                   <div className="flex-1">
-                      <h4 className="font-bold text-gray-800 mb-1">Email de Notificaciones</h4>
-                      <p className="text-sm text-gray-600 mb-3">Dirección de correo para respaldo y registro formal.</p>
-                      <input type="email" className="w-full max-w-md border border-blue-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" value={tempConfig.notificationEmail} onChange={e => setTempConfig({...tempConfig, notificationEmail: e.target.value})} />
-                   </div>
-                </div>
-             </div>
-             <div className="bg-gray-50 p-6 border-t border-gray-100 flex justify-end">
-                <button onClick={handleSaveConfig} className="bg-gray-900 text-white px-6 py-3 rounded-xl font-bold hover:bg-black transition-colors flex items-center gap-2 shadow-lg"><Save size={18} /> Guardar Cambios</button>
-             </div>
-          </div>
-       </section>
-    </div>
-  );
+  const placementRate = useMemo(() => {
+    const apps = effectiveGlobal.applicationsTotal;
+    if (!apps) return 0;
+    return Math.round((effectiveGlobal.hiresTotal / apps) * 100);
+  }, [effectiveGlobal]);
 
-  const renderCompanyDetailsPanel = () => {
-    if (!companyDetails) return null;
-    const usageJobPercent = (companyDetails.usageStats.jobsPosted / companyDetails.usageStats.jobsLimit) * 100;
-    const usageWorkerPercent = (companyDetails.usageStats.workersContacted / companyDetails.usageStats.workersLimit) * 100;
+  const monthlyTotals = useMemo(() => {
+    const ym = selectedYm;
+    const expensesThisMonth = manualExpenses.filter((e) => isExpenseInMonth(e, ym));
+    const total = expensesThisMonth.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+
+    // Projection: suma recurrencias "monthly" que abarcan ym
+    // (ya queda incluido por isExpenseInMonth)
+    return { total, count: expensesThisMonth.length, list: expensesThisMonth };
+  }, [manualExpenses, selectedYm]);
+
+  function isExpenseInMonth(e: any, ym: string): boolean {
+    const start = String(e.startMonth || "");
+    if (!start) return false;
+    if (e.recurrence === "once") return start === ym;
+    // monthly
+    const months = clampInt(e.months, 1);
+    const [sy, sm] = start.split("-").map((x: string) => parseInt(x, 10));
+    const [ty, tm] = ym.split("-").map((x) => parseInt(x, 10));
+    if (!sy || !sm || !ty || !tm) return false;
+    const startIdx = sy * 12 + (sm - 1);
+    const targetIdx = ty * 12 + (tm - 1);
+    return targetIdx >= startIdx && targetIdx <= startIdx + Math.max(0, months - 1);
+  }
+
+  // --------- Company details ---------
+  async function loadCompanyDetails(companyId: string) {
+    setSelectedCompanyLoading(true);
+    try {
+      const ref = doc(db, "companies", companyId);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        setSelectedCompanyDoc(null);
+        return;
+      }
+      setSelectedCompanyDoc(snap.data() as CompanyDoc);
+    } catch (e) {
+      console.error("getDoc company error:", e);
+      setSelectedCompanyDoc(null);
+    } finally {
+      setSelectedCompanyLoading(false);
+    }
+  }
+
+  function openCompany(companyId: string) {
+    setSelectedCompanyId(companyId);
+    loadCompanyDetails(companyId);
+  }
+
+  function openBillingModal(type: BillingRecordDoc["type"]) {
+    const today = new Date().toISOString().slice(0, 10);
+    setBillingType(type);
+    setBillingAmount("");
+    setBillingCurrency("CLP");
+    setBillingIssueDate(type === "invoice" ? today : "");
+    setBillingDueDate("");
+    setBillingPaidDate(type === "payment" ? today : "");
+    setBillingInvoiceNumber("");
+    setBillingNote("");
+    setBillingModalOpen(true);
+  }
+
+  function templateDefaults(key: CommsOutboxDoc["templateKey"], company: CompanyDoc) {
+    const companyName = company?.name || "tu empresa";
+    switch (key) {
+      case "overdue":
+        return {
+          subject: `AgroConnect: regularización de pago – ${companyName}`,
+          text:
+            `Hola ${companyName},\n\n` +
+            `Te escribimos desde AgroConnect porque tu cuenta figura con estado MOROSO. ` +
+            `Si ya realizaste el pago, por favor responde con el comprobante para regularizar. ` +
+            `Si necesitas coordinación, podemos ayudarte.\n\n` +
+            `Equipo AgroConnect`,
+        };
+      case "suspension":
+        return {
+          subject: `AgroConnect: aviso de suspensión preventiva – ${companyName}`,
+          text:
+            `Hola ${companyName},\n\n` +
+            `Este es un aviso automático: si la morosidad se mantiene, ` +
+            `la cuenta puede quedar suspendida para publicar nuevas ofertas. ` +
+            `Regularizando el pago, se reactivará inmediatamente.\n\n` +
+            `Equipo AgroConnect`,
+        };
+      case "low_activity":
+        return {
+          subject: `AgroConnect: sugerencias para aumentar postulaciones – ${companyName}`,
+          text:
+            `Hola ${companyName},\n\n` +
+            `Notamos baja actividad reciente (pocas publicaciones/postulaciones). ` +
+            `Si quieres, te ayudamos a optimizar tu oferta y difusión para mejorar resultados.\n\n` +
+            `Equipo AgroConnect`,
+        };
+      case "holiday":
+        return {
+          subject: `¡Felices fiestas! – AgroConnect`,
+          text:
+            `Hola ${companyName},\n\n` +
+            `Queremos desearte felices fiestas y un excelente cierre de año. ` +
+            `Gracias por ser parte de AgroConnect.\n\n` +
+            `Equipo AgroConnect`,
+        };
+      default:
+        return { subject: "AgroConnect", text: "" };
+    }
+  }
+
+  function openCommsModal(templateKey: CommsOutboxDoc["templateKey"]) {
+    if (!selectedCompanyDoc) return;
+    setCommsTemplate(templateKey);
+    setCommsFromMode("brand");
+    const d = templateDefaults(templateKey, selectedCompanyDoc);
+    setCommsSubject(d.subject);
+    setCommsText(d.text);
+    setCommsModalOpen(true);
+  }
+
+  async function handleAddBillingRecord() {
+    if (!selectedCompanyId) return;
+    const amt = Number(billingAmount);
+    if (!amt || !isFinite(amt) || amt <= 0) {
+      alert("Monto inválido.");
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const status: BillingRecordDoc["status"] =
+      billingType === "payment"
+        ? "paid"
+        : billingDueDate && billingDueDate < today
+          ? "overdue"
+          : "unpaid";
+
+    setBillingSaving(true);
+    try {
+      await addDoc(collection(db, "companies", selectedCompanyId, "billing"),
+        stripUndefinedDeep({
+          type: billingType,
+          amount: amt,
+          currency: billingCurrency,
+          issueDate: billingIssueDate || undefined,
+          dueDate: billingDueDate || undefined,
+          paidDate: billingPaidDate || undefined,
+          status,
+          invoiceNumber: billingInvoiceNumber.trim() || undefined,
+          note: billingNote.trim() || undefined,
+          createdAt: serverTimestamp(),
+          createdBy: { uid: me?.uid, email: me?.email || null },
+        } satisfies BillingRecordDoc)
+      );
+
+      // (Opcional/MVP) si registras una factura vencida, marcamos la empresa como morosa
+      if (billingType === "invoice" && status === "overdue") {
+        await updateDoc(doc(db, "companies", selectedCompanyId), {
+          status: "Overdue",
+          updatedAt: serverTimestamp(),
+        } as any);
+      }
+
+      setBillingModalOpen(false);
+    } catch (e: any) {
+      console.error(e);
+      alert("No se pudo guardar registro de facturación: " + (e?.message || e));
+    } finally {
+      setBillingSaving(false);
+    }
+  }
+
+  async function handleSendComms() {
+    if (!selectedCompanyId || !selectedCompanyDoc) return;
+    const to = (selectedCompanyDoc.billingEmail || selectedCompanyDoc.contactEmail || selectedCompanyDoc.adminEmail || "").trim();
+    if (!to) {
+      alert("La empresa no tiene email de contacto/facturación.");
+      return;
+    }
+    if (!commsSubject.trim() || !commsText.trim()) {
+      alert("Asunto y mensaje no pueden ir vacíos.");
+      return;
+    }
+
+    setCommsSending(true);
+    try {
+      await addDoc(collection(db, "comms_outbox"),
+        stripUndefinedDeep({
+          companyId: selectedCompanyId,
+          to,
+          templateKey: commsTemplate,
+          fromEmail: commsFromMode === "me" ? (me?.email || BRAND_FROM_EMAIL) : BRAND_FROM_EMAIL,
+          replyTo: me?.email || null,
+          subject: commsSubject.trim(),
+          text: commsText.trim(),
+          status: "queued",
+          createdAt: serverTimestamp(),
+          createdBy: { uid: me?.uid, email: me?.email || null },
+        } satisfies CommsOutboxDoc)
+      );
+      setCommsModalOpen(false);
+      alert("Mensaje encolado. (Se registró en comms_outbox)");
+    } catch (e: any) {
+      console.error(e);
+      alert("No se pudo encolar el mensaje: " + (e?.message || e));
+    } finally {
+      setCommsSending(false);
+    }
+  }
+
+  // --------- Company CRUD ---------
+  function resetForm() {
+    setName("");
+    setRut("");
+    setIndustry("");
+    setDescription("");
+    setWebsite("");
+    setBillingEmail("");
+    setLegalName("");
+    setTagsInput("");
+    setContactEmail("");
+    setPhone("");
+    setAddressLine1("");
+    setCity("");
+    setRegion("Maule");
+    setAdminEmail("");
+    setPlan("Basic");
+    setStatus("Active");
+  }
+
+  function openCreateModal() {
+    setModalMode("create");
+    resetForm();
+    setModalOpen(true);
+  }
+
+  async function openEditModal(companyId: string) {
+    setModalMode("edit");
+    setSaving(false);
+
+    let data = selectedCompanyId === companyId ? selectedCompanyDoc : null;
+    if (!data) {
+      try {
+        const snap = await getDoc(doc(db, "companies", companyId));
+        if (snap.exists()) data = snap.data() as CompanyDoc;
+      } catch (e) {
+        console.error("prefill getDoc error:", e);
+      }
+    }
+    if (!data) {
+      alert("No se pudo cargar la empresa para editar.");
+      return;
+    }
+    setSelectedCompanyId(companyId);
+    setSelectedCompanyDoc(data);
+
+    setName(data.name || "");
+    setRut(data.rut || "");
+    setIndustry(data.industry || "");
+    setDescription(data.description || "");
+    setWebsite(data.website || "");
+    setBillingEmail(data.billingEmail || "");
+    setLegalName(data.legalName || "");
+    setTagsInput((data.tags || []).join(", "));
+
+    setContactEmail(data.contactEmail || "");
+    setPhone(data.phone || "");
+
+    setAddressLine1(data.address?.line1 || "");
+    setCity(data.address?.city || "");
+    setRegion(data.address?.region || "Maule");
+
+    setAdminEmail(data.adminEmail || "");
+    setPlan((data.subscriptionPlan || "Basic") as SubscriptionPlan);
+    setStatus((data.status || "Active") as CompanyStatus);
+
+    setModalOpen(true);
+  }
+
+  function validateForm(): string | null {
+    if (!name.trim()) return "Falta el nombre.";
+    if (rut && !isValidRutFormat(rut)) return "RUT con formato inválido. Ej: 12345678-5";
+    if (adminEmail && !isValidEmail(adminEmail)) return "Admin email inválido.";
+    if (contactEmail && !isValidEmail(contactEmail)) return "Email contacto inválido.";
+    if (billingEmail && !isValidEmail(billingEmail)) return "Email facturación inválido.";
+    if (website && !/^https?:\/\/.+/i.test(website.trim()))
+      return "Sitio web debe partir con http:// o https://";
+    return null;
+  }
+
+  async function handleSaveCompany() {
+    const msg = validateForm();
+    if (msg) {
+      alert(msg);
+      return;
+    }
+
+    const normPhone = normalizePhoneCL(phone);
+    const tags = normalizeTags(tagsInput);
+    const createdBy = { uid: me?.uid, email: me?.email || undefined };
+
+    setSaving(true);
+    try {
+      if (modalMode === "create") {
+        const ref = await addDoc(
+          collection(db, "companies"),
+          stripUndefinedDeep({
+            name: name.trim(),
+            rut: rut.trim() || undefined,
+            industry: industry.trim() || undefined,
+            description: description.trim() || undefined,
+            website: website.trim() || undefined,
+            billingEmail: billingEmail.trim() || undefined,
+            legalName: legalName.trim() || undefined,
+            tags,
+
+            contactEmail: contactEmail.trim() || undefined,
+            phone: normPhone || undefined,
+
+            address: {
+              line1: addressLine1.trim() || undefined,
+              city: city.trim() || undefined,
+              region: region.trim() || undefined,
+              country: "Chile",
+            },
+
+            adminEmail: adminEmail.trim(),
+            subscriptionPlan: plan,
+            status,
+
+            createdBy,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          } satisfies CompanyDoc)
+        );
+
+        setSelectedCompanyId(ref.id);
+        await loadCompanyDetails(ref.id);
+        setModalOpen(false);
+      } else {
+        if (!selectedCompanyId) {
+          alert("No hay empresa seleccionada para editar.");
+          return;
+        }
+        const ref = doc(db, "companies", selectedCompanyId);
+        await updateDoc(
+          ref,
+          stripUndefinedDeep({
+            name: name.trim(),
+            rut: rut.trim() || undefined,
+            industry: industry.trim() || undefined,
+            description: description.trim() || undefined,
+            website: website.trim() || undefined,
+            billingEmail: billingEmail.trim() || undefined,
+            legalName: legalName.trim() || undefined,
+            tags,
+
+            contactEmail: contactEmail.trim() || undefined,
+            phone: normPhone || undefined,
+
+            address: {
+              line1: addressLine1.trim() || undefined,
+              city: city.trim() || undefined,
+              region: region.trim() || undefined,
+              country: "Chile",
+            },
+
+            adminEmail: adminEmail.trim(),
+            subscriptionPlan: plan,
+            status,
+
+            updatedAt: serverTimestamp(),
+          })
+        );
+
+        await loadCompanyDetails(selectedCompanyId);
+        setModalOpen(false);
+      }
+    } catch (e: any) {
+      console.error("save company error:", e);
+      alert("No se pudo guardar empresa: " + (e?.message || "error"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // --------- FinOps actions ---------
+  async function saveInfraForMonth() {
+    try {
+      const payload: InfraFinOpsDoc = stripUndefinedDeep({
+        ym: selectedYm,
+        firestoreReads: infraReads ? clampInt(infraReads, 0) : undefined,
+        firestoreWrites: infraWrites ? clampInt(infraWrites, 0) : undefined,
+        firestoreDeletes: infraDeletes ? clampInt(infraDeletes, 0) : undefined,
+        storageGB: infraStorage ? Number(infraStorage) : undefined,
+        functionsInvocations: infraFnInv ? clampInt(infraFnInv, 0) : undefined,
+        notes: infraNotes?.trim() || undefined,
+        updatedAt: serverTimestamp(),
+      });
+
+      await updateDoc(doc(db, "finops_infra", selectedYm), payload as any).catch(async () => {
+        // If doc doesn't exist, create it via setDoc
+        const { setDoc } = await import("firebase/firestore");
+        await setDoc(doc(db, "finops_infra", selectedYm), payload as any, { merge: true });
+      });
+
+      alert("FinOps (infra) guardado.");
+    } catch (e: any) {
+      console.error(e);
+      alert("No se pudo guardar FinOps infra: " + (e?.message || e));
+    }
+  }
+
+  async function addManualExpense() {
+    const amt = Number(expAmount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      alert("Monto inválido.");
+      return;
+    }
+    if (!/^\d{4}-\d{2}$/.test(expStartMonth)) {
+      alert("Mes inválido (YYYY-MM).");
+      return;
+    }
+    const months = expRecurrence === "once" ? 1 : Math.max(1, clampInt(expMonths, 1));
+
+    try {
+      await addDoc(
+        collection(db, "finops_manualExpenses"),
+        stripUndefinedDeep({
+          category: expCategory,
+          vendor: expVendor.trim() || undefined,
+          amount: amt,
+          currency: expCurrency,
+          startMonth: expStartMonth,
+          recurrence: expRecurrence,
+          months: expRecurrence === "monthly" ? months : undefined,
+          note: expNote.trim() || undefined,
+          createdAt: serverTimestamp(),
+          createdBy: { uid: me?.uid, email: me?.email || undefined },
+        } satisfies ManualExpenseDoc)
+      );
+
+      setExpVendor("");
+      setExpAmount("");
+      setExpNote("");
+      setExpRecurrence("once");
+      setExpMonths("1");
+      setExpStartMonth(selectedYm);
+
+      alert("Gasto registrado.");
+    } catch (e: any) {
+      console.error(e);
+      alert("No se pudo registrar gasto: " + (e?.message || e));
+    }
+  }
+
+  // --------- Render sections ---------
+  function renderExecutiveAndActivity() {
     return (
-      <div className="fixed inset-y-0 right-0 w-full md:w-[600px] bg-white shadow-2xl z-50 overflow-y-auto animate-in slide-in-from-right duration-300 border-l border-gray-200">
-        <div className="sticky top-0 bg-white/95 backdrop-blur-sm z-10 border-b border-gray-100 px-6 py-4 flex justify-between items-center">
-          <div><span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Ficha de Cliente</span><h2 className="text-xl font-bold text-gray-800">{companyDetails.name}</h2></div>
-          <button onClick={handleCloseDetails} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors"><X size={24} /></button>
-        </div>
-        <div className="p-8 space-y-8">
-          <section className="flex flex-col md:flex-row gap-6 items-start">
-            <div className="relative group shrink-0">
-               <div className="w-24 h-24 rounded-full bg-emerald-50 border-2 border-emerald-100 flex items-center justify-center overflow-hidden">
-                 {companyDetails.logoUrl ? (<img src={companyDetails.logoUrl} alt="Logo" className="w-full h-full object-cover" />) : (<Building2 size={40} className="text-emerald-300" />)}
-               </div>
-               <button onClick={handleLogoUpload} className="absolute bottom-0 right-0 bg-gray-900 text-white p-1.5 rounded-full hover:bg-emerald-600 transition-colors shadow-md" title="Subir Logo"><Upload size={14} /></button>
-            </div>
-            <div className="flex-1 w-full space-y-3">
-              <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Razón Social</label><input type="text" value={companyDetails.name} className="w-full border border-gray-200 rounded p-2 text-sm bg-gray-50" readOnly /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">RUT</label><input type="text" value={companyDetails.rut} className="w-full border border-gray-200 rounded p-2 text-sm bg-gray-50" readOnly /></div>
-                <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Plan</label><span className={`inline-block w-full p-2 text-sm font-semibold rounded border ${companyDetails.subscriptionPlan === 'Enterprise' ? 'bg-purple-50 text-purple-700 border-purple-200' : companyDetails.subscriptionPlan === 'Pro' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>{companyDetails.subscriptionPlan}</span></div>
+      <div className="space-y-6">
+        {/* Header row */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-gray-500">SUPERADMIN</div>
+              <div className="text-2xl font-extrabold text-gray-900">Dashboard Global</div>
+              <div className="text-sm text-gray-600">
+                Visión ejecutiva, actividad de plataforma y FinOps. Fuente: Firestore + agregados <Badge>stats/*</Badge>
               </div>
             </div>
-          </section>
-          <section className="bg-gray-50 p-5 rounded-xl border border-gray-100">
-             <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Users size={18} className="text-gray-400" /> Contacto Principal</h3>
-             <div className="space-y-3">
-               <div className="flex items-center gap-3 text-sm text-gray-600"><User size={16} className="text-gray-400" /><span className="font-medium">{companyDetails.hrContact}</span></div>
-               <div className="flex items-center gap-3 text-sm text-gray-600"><Mail size={16} className="text-gray-400" /><a href={`mailto:${companyDetails.contactEmail}`} className="hover:text-emerald-600">{companyDetails.contactEmail}</a></div>
-               <div className="flex items-center gap-3 text-sm text-gray-600"><Phone size={16} className="text-gray-400" /><span>{companyDetails.phone}</span></div>
-             </div>
-          </section>
-          <section className="bg-red-50 border border-red-100 p-4 rounded-xl flex justify-between items-center">
-                <div><h4 className="font-bold text-red-800 text-sm flex items-center gap-2"><ShieldAlert size={16} /> Zona de Peligro</h4><p className="text-xs text-red-600 mt-1">Suspender acceso a la plataforma.</p></div>
-                <div className="flex items-center"><label className="relative inline-flex items-center cursor-pointer"><input type="checkbox" className="sr-only peer" checked={companyDetails.status === 'Active'} onChange={toggleCompanyStatus} /><div className="w-11 h-6 bg-red-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div><span className="ml-3 text-xs font-medium text-gray-700">{companyDetails.status === 'Active' ? 'Activo' : 'Suspendido'}</span></label></div>
-          </section>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge>Usuario: {me?.email || "—"}</Badge>
+              <Badge>Actualización: {globalStats?.updatedAt ? "ok" : "pendiente stats"}</Badge>
+              <select
+                className={inputBase + " w-40"}
+                value={selectedYm}
+                onChange={(e) => setSelectedYm(e.target.value)}
+              >
+                {/* si no hay monthly stats aún, al menos muestra current */}
+                {monthlyStats.length === 0 ? (
+                  <option value={selectedYm}>{ymLabel(selectedYm)}</option>
+                ) : (
+                  monthlyStats
+                    .slice()
+                    .reverse()
+                    .map((m) => (
+                      <option key={m.ym} value={m.ym}>
+                        {ymLabel(m.ym)}
+                      </option>
+                    ))
+                )}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* KPI cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <KpiCard
+            title="Empresas totales"
+            value={effectiveGlobal.companiesTotal}
+            subtitle={
+              <span className="flex gap-2 flex-wrap">
+                <span>Activas: <b>{effectiveGlobal.companiesActive}</b></span>
+                <span>Morosas: <b>{effectiveGlobal.companiesOverdue}</b></span>
+              </span>
+            }
+          />
+          <KpiCard
+            title="Jobs totales"
+            value={effectiveGlobal.jobsTotal}
+            subtitle={
+              <span className="flex gap-2 flex-wrap">
+                <span>Activos: <b>{effectiveGlobal.jobsActive}</b></span>
+                <span>Futuros: <b>{effectiveGlobal.jobsFuture}</b></span>
+                <span>Cerrados: <b>{effectiveGlobal.jobsClosed}</b></span>
+              </span>
+            }
+          />
+          <KpiCard
+            title={`Actividad ${ymLabel(selectedYm)}`}
+            value={clampInt(monthDoc?.jobsCreated, 0)}
+            subtitle={
+              <span className="flex gap-2 flex-wrap">
+                <span>Postulaciones: <b>{clampInt(monthDoc?.applicationsCreated, 0)}</b></span>
+                <span>Contrataciones: <b>{clampInt(monthDoc?.hiresCreated, 0)}</b></span>
+              </span>
+            }
+          />
+          <KpiCard
+            title="Eficiencia de colocación"
+            value={`${placementRate}%`}
+            subtitle={
+              <span className="flex gap-2 flex-wrap">
+                <span>Hires: <b>{effectiveGlobal.hiresTotal}</b></span>
+                <span>Apps: <b>{effectiveGlobal.applicationsTotal}</b></span>
+              </span>
+            }
+          />
+        </div>
+
+        {/* Activity (simple list + trend) */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <div className="xl:col-span-2 bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold text-gray-900">Actividad en el tiempo</div>
+              <Badge>Mensual</Badge>
+            </div>
+            <div className="mt-3 text-sm text-gray-600">
+              Jobs y postulaciones por mes (desde <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">stats_monthly</code>).
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="text-xs uppercase text-gray-500 bg-gray-50">
+                  <tr>
+                    <th className="p-3">Mes</th>
+                    <th className="p-3">Jobs</th>
+                    <th className="p-3">Postulaciones</th>
+                    <th className="p-3">Contrataciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {(monthlyStats.length ? monthlyStats.slice(-12) : []).reverse().map((m) => (
+                    <tr key={m.ym} className={m.ym === selectedYm ? "bg-emerald-50/40" : ""}>
+                      <td className="p-3 font-semibold text-gray-900">{ymLabel(m.ym)}</td>
+                      <td className="p-3">{clampInt(m.jobsCreated, 0)}</td>
+                      <td className="p-3">{clampInt(m.applicationsCreated, 0)}</td>
+                      <td className="p-3">{clampInt(m.hiresCreated, 0)}</td>
+                    </tr>
+                  ))}
+                  {monthlyStats.length === 0 && (
+                    <tr>
+                      <td className="p-3 text-sm text-gray-600" colSpan={4}>
+                        Aún no hay stats mensuales. Cuando despliegues las Functions de agregación, se poblará automáticamente.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+            <div className="text-lg font-semibold text-gray-900">Top empresas (actividad)</div>
+            <div className="mt-2 text-sm text-gray-600">
+              Ranking básico usando <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">stats_companies</code>.
+            </div>
+
+            <TopCompaniesList companies={companies} />
+          </div>
+        </div>
+
+        {/* FinOps block */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-gray-900">FinOps</div>
+              <div className="text-sm text-gray-600">
+                Costos automáticos (estimados) + costos manuales (operacionales). Preparado para integrar Google Cloud Billing.
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge>Mes: {ymLabel(selectedYm)}</Badge>
+              <Badge>Gastos manuales: {monthlyTotals.count}</Badge>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+            {/* Infra */}
+            <div className="rounded-2xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-gray-900">Infra (estimado / editable)</div>
+                <button
+                  onClick={saveInfraForMonth}
+                  className="rounded-xl bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black"
+                >
+                  Guardar
+                </button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div>
+                  <div className={labelBase}>Firestore Reads</div>
+                  <input className={inputBase} value={infraReads} onChange={(e) => setInfraReads(e.target.value)} placeholder="ej: 120000" />
+                </div>
+                <div>
+                  <div className={labelBase}>Firestore Writes</div>
+                  <input className={inputBase} value={infraWrites} onChange={(e) => setInfraWrites(e.target.value)} placeholder="ej: 25000" />
+                </div>
+                <div>
+                  <div className={labelBase}>Firestore Deletes</div>
+                  <input className={inputBase} value={infraDeletes} onChange={(e) => setInfraDeletes(e.target.value)} placeholder="ej: 1200" />
+                </div>
+                <div>
+                  <div className={labelBase}>Storage (GB)</div>
+                  <input className={inputBase} value={infraStorage} onChange={(e) => setInfraStorage(e.target.value)} placeholder="ej: 8.5" />
+                </div>
+                <div>
+                  <div className={labelBase}>Functions Invocations</div>
+                  <input className={inputBase} value={infraFnInv} onChange={(e) => setInfraFnInv(e.target.value)} placeholder="ej: 9000" />
+                </div>
+                <div>
+                  <div className={labelBase}>Notas</div>
+                  <input className={inputBase} value={infraNotes} onChange={(e) => setInfraNotes(e.target.value)} placeholder="ej: cambio de plan / pruebas" />
+                </div>
+              </div>
+
+              <div className="mt-3 text-xs text-gray-500">
+                Este bloque es editable para MVP. Luego podemos reemplazar/llenar automáticamente desde Billing export.
+              </div>
+            </div>
+
+            {/* Manual expenses */}
+            <div className="rounded-2xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-gray-900">Gastos manuales</div>
+                <Badge>Total mes: {formatMoney(monthlyTotals.total, expCurrency)}</Badge>
+              </div>
+
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <div className={labelBase}>Categoría</div>
+                  <select className={inputBase} value={expCategory} onChange={(e) => setExpCategory(e.target.value as any)}>
+                    <option value="Personal">Personal</option>
+                    <option value="Marketing">Marketing</option>
+                    <option value="Servicios">Servicios</option>
+                    <option value="Licencias">Licencias / Software</option>
+                    <option value="Otros">Otros</option>
+                  </select>
+                </div>
+                <div>
+                  <div className={labelBase}>Proveedor / detalle</div>
+                  <input className={inputBase} value={expVendor} onChange={(e) => setExpVendor(e.target.value)} placeholder="ej: Meta Ads" />
+                </div>
+                <div>
+                  <div className={labelBase}>Monto</div>
+                  <input className={inputBase} value={expAmount} onChange={(e) => setExpAmount(e.target.value)} placeholder="ej: 150000" />
+                </div>
+                <div>
+                  <div className={labelBase}>Moneda</div>
+                  <select className={inputBase} value={expCurrency} onChange={(e) => setExpCurrency(e.target.value as any)}>
+                    <option value="CLP">CLP</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+                <div>
+                  <div className={labelBase}>Mes inicio (YYYY-MM)</div>
+                  <input className={inputBase} value={expStartMonth} onChange={(e) => setExpStartMonth(e.target.value)} placeholder="2026-01" />
+                </div>
+                <div>
+                  <div className={labelBase}>Recurrencia</div>
+                  <select className={inputBase} value={expRecurrence} onChange={(e) => setExpRecurrence(e.target.value as any)}>
+                    <option value="once">Una vez</option>
+                    <option value="monthly">Mensual (por N meses)</option>
+                  </select>
+                </div>
+                {expRecurrence === "monthly" && (
+                  <div className="md:col-span-2">
+                    <div className={labelBase}>Cantidad de meses</div>
+                    <input className={inputBase} value={expMonths} onChange={(e) => setExpMonths(e.target.value)} placeholder="ej: 6" />
+                    <div className={helpBase}>
+                      Si defines 6 meses desde {expStartMonth}, se proyecta automáticamente en el dashboard.
+                    </div>
+                  </div>
+                )}
+                <div className="md:col-span-2">
+                  <div className={labelBase}>Nota</div>
+                  <input className={inputBase} value={expNote} onChange={(e) => setExpNote(e.target.value)} placeholder="ej: campaña verano / contratación" />
+                </div>
+              </div>
+
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button
+                  onClick={addManualExpense}
+                  className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                >
+                  Registrar gasto
+                </button>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-sm font-semibold text-gray-900">Detalle del mes</div>
+                <div className="mt-2 max-h-56 overflow-auto rounded-xl border border-gray-200">
+                  <table className="w-full text-left">
+                    <thead className="text-xs uppercase text-gray-500 bg-gray-50">
+                      <tr>
+                        <th className="p-2">Categoría</th>
+                        <th className="p-2">Detalle</th>
+                        <th className="p-2">Tipo</th>
+                        <th className="p-2 text-right">Monto</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {monthlyTotals.list.map((e: any) => (
+                        <tr key={e.id}>
+                          <td className="p-2 text-sm">{e.category}</td>
+                          <td className="p-2 text-sm text-gray-600">{e.vendor || e.note || "—"}</td>
+                          <td className="p-2 text-xs">
+                            {e.recurrence === "once" ? (
+                              <Badge>1 vez</Badge>
+                            ) : (
+                              <Badge>{clampInt(e.months, 1)} meses</Badge>
+                            )}
+                          </td>
+                          <td className="p-2 text-sm font-semibold text-right">
+                            {formatMoney(Number(e.amount) || 0, e.currency || "CLP")}
+                          </td>
+                        </tr>
+                      ))}
+                      {monthlyTotals.list.length === 0 && (
+                        <tr>
+                          <td className="p-3 text-sm text-gray-600" colSpan={4}>
+                            No hay gastos manuales registrados para este mes.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-2 text-xs text-gray-500">
+                  Nota: los gastos mensuales se incluyen automáticamente en cada mes dentro del rango definido.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Ops quick links */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+          <div className="text-lg font-semibold text-gray-900">Acciones rápidas</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={() => setActiveTab("COMPANIES")}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+            >
+              Gestionar empresas
+            </button>
+            <button
+              onClick={() => setActiveTab("REQUESTS")}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+            >
+              Revisar solicitudes (leads)
+            </button>
+            <button
+              onClick={() => setActiveTab("SETTINGS")}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+            >
+              Configuración
+            </button>
+          </div>
         </div>
       </div>
     );
-  };
+  }
 
-  const renderCompanies = () => (
-    <div className="space-y-6 animate-fade-in relative">
-      <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
-        <div className="relative w-full md:w-96">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} /><input type="text" placeholder="Buscar empresa..." className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm" />
-        </div>
-        <div className="flex gap-2 w-full md:w-auto">
-          <button className="flex items-center gap-2 bg-white border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-50 transition-colors"><Download size={16} /> Exportar</button>
-          <button className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm transition-colors shadow-sm"><Plus size={16} /> Nueva Empresa</button>
-        </div>
-      </div>
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50 text-gray-500 text-xs uppercase font-semibold">
-            <tr><th className="p-4">Empresa</th><th className="p-4">Plan Actual</th><th className="p-4">Estado Pago</th><th className="p-4 text-right">Acciones</th></tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 text-sm">
-            {companies.map(company => (
-              <tr key={company.id} className="hover:bg-gray-50 transition-colors group">
-                <td className="p-4"><div className="flex items-center gap-3"><div className="bg-emerald-100 p-2 rounded-lg text-emerald-700 group-hover:bg-emerald-600 group-hover:text-white transition-colors"><Building2 size={20} /></div><div><p className="font-bold text-gray-800">{company.name}</p></div></div></td>
-                <td className="p-4"><span className={`inline-block px-2 py-1 text-xs font-semibold rounded-md border ${company.subscriptionPlan === 'Enterprise' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>{company.subscriptionPlan}</span></td>
-                <td className="p-4">{company.status === 'Active' ? (<span className="text-emerald-600 font-medium">Al día</span>) : (<span className="text-red-600 font-medium">Pendiente</span>)}</td>
-                <td className="p-4 text-right"><button onClick={() => setSelectedCompanyId(company.id)} className="text-gray-400 hover:text-gray-800 p-2 hover:bg-gray-100 rounded-full transition-colors"><MoreVertical size={18} /></button></td>
-              </tr>
+  function renderCompanies() {
+    return (
+      <div className="space-y-4">
+        {/* List */}
+<div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-gray-200 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+            <div className="flex items-center gap-2">
+              <input
+                className={inputBase + " md:w-96"}
+                placeholder="Buscar: empresa, RUT, email, rubro, región…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {loadingCompanies ? <Badge>Cargando…</Badge> : <Badge>{filteredCompanies.length} empresas</Badge>}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={openCreateModal}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+              >
+                + Nueva Empresa
+              </button>
+            </div>
+          </div>
+
+          <div className="divide-y divide-gray-100">
+            {filteredCompanies.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => openCompany(c.id)}
+                className={
+                  "w-full text-left p-4 hover:bg-gray-50 transition-colors flex items-center justify-between gap-3 " +
+                  (selectedCompanyId === c.id ? "bg-emerald-50/30" : "")
+                }
+              >
+                <div className="min-w-0">
+                  <div className="font-semibold text-gray-900 truncate">{c.name}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <Badge>{c.subscriptionPlan || "Basic"}</Badge>
+                    <StatusBadge status={(c.status as any) || "Active"} />
+                    {c.region ? <Badge>{c.region}</Badge> : null}
+                    {c.industry ? <span className="text-xs text-gray-600 truncate">{c.industry}</span> : null}
+                  </div>
+                  <div className="mt-1 text-xs text-gray-500 truncate">
+                    {c.adminEmail ? `Admin: ${c.adminEmail} · ` : ""}
+                    {c.contactEmail ? `Contacto: ${c.contactEmail}` : ""}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-gray-400">Ver</span>
+                  <span className="text-gray-400">›</span>
+                </div>
+              </button>
             ))}
-          </tbody>
-        </table>
-      </div>
-      {selectedCompanyId && (<div className="fixed inset-0 bg-black/20 z-40 backdrop-blur-sm transition-opacity" onClick={handleCloseDetails}></div>)}
-      {renderCompanyDetailsPanel()}
-    </div>
-  );
+            {!loadingCompanies && filteredCompanies.length === 0 && (
+              <div className="p-6 text-sm text-gray-600">No hay empresas que coincidan con tu búsqueda.</div>
+            )}
+          </div>
+        </div>
 
-  return (
-    <div className="space-y-8">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div><h2 className="text-3xl font-bold text-gray-900 tracking-tight">Administración Global</h2><p className="text-gray-500 mt-1">Supervisión general de la plataforma AgroConnect.</p></div>
-        <div className="flex bg-white p-1 rounded-lg border border-gray-200 shadow-sm overflow-x-auto max-w-full">
-          <button onClick={() => setActiveTab('OVERVIEW')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'OVERVIEW' ? 'bg-gray-900 text-white shadow' : 'text-gray-600 hover:text-gray-900'}`}>Visión General</button>
-          <button onClick={() => setActiveTab('COMPANIES')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'COMPANIES' ? 'bg-gray-900 text-white shadow' : 'text-gray-600 hover:text-gray-900'}`}>Empresas</button>
-          <button onClick={() => setActiveTab('REQUESTS')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === 'REQUESTS' ? 'bg-gray-900 text-white shadow' : 'text-gray-600 hover:text-gray-900'}`}>Solicitudes{leads.length > 0 && (<span className="bg-red-500 text-white text-[10px] px-1.5 rounded-full">{leads.length}</span>)}</button>
-          <button onClick={() => setActiveTab('SETTINGS')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'SETTINGS' ? 'bg-gray-900 text-white shadow' : 'text-gray-600 hover:text-gray-900'}`}>Configuración</button>
+        
+
+        {/* Drawer (detalle empresa) */}
+        {selectedCompanyId ? (
+          <div className="fixed inset-0 z-50">
+            <div className="absolute inset-0 bg-black/40" onClick={() => setSelectedCompanyId(null)} />
+            <div className="absolute right-0 top-0 h-full w-full sm:w-[90%] lg:w-[70%] xl:w-[60%] bg-white shadow-2xl border-l border-gray-200 overflow-y-auto">
+              <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-gray-200 p-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-gray-500">Detalle empresa</div>
+                  <div className="text-lg font-extrabold text-gray-900">
+                    {selectedCompanyDoc?.name || "Empresa"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => selectedCompanyId && openEditModal(selectedCompanyId)}
+                    disabled={!selectedCompanyId || !selectedCompanyDoc}
+                    className="rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Editar
+                  </button>
+                  <button
+                    onClick={() => setSelectedCompanyId(null)}
+                    className="rounded-xl bg-gray-900 px-3 py-2 text-sm font-semibold text-white hover:bg-black"
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-4 space-y-4">
+<div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-gray-200 flex items-center justify-between gap-2">
+            <div className="font-semibold text-gray-900">Detalle empresa</div>
+            <div className="flex items-center gap-2">
+              <button
+                disabled={!selectedCompanyId || !selectedCompanyDoc}
+                onClick={() => selectedCompanyId && openEditModal(selectedCompanyId)}
+                className="rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Editar
+              </button>
+            </div>
+          </div>
+
+          <div className="p-4 space-y-4">
+            {!selectedCompanyId ? (
+              <div className="text-sm text-gray-600">Selecciona una empresa para ver sus datos.</div>
+            ) : selectedCompanyLoading ? (
+              <div className="text-sm text-gray-600">Cargando…</div>
+            ) : !selectedCompanyDoc ? (
+              <div className="text-sm text-gray-600">No se encontró el documento en Firestore.</div>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <div className="text-lg font-extrabold text-gray-900">{selectedCompanyDoc.name}</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge>{selectedCompanyDoc.subscriptionPlan || "Basic"}</Badge>
+                    <StatusBadge status={(selectedCompanyDoc.status as any) || "Active"} />
+                    {selectedCompanyDoc.rut ? <Badge>{selectedCompanyDoc.rut}</Badge> : null}
+                    {selectedCompanyDoc.address?.region ? <Badge>{selectedCompanyDoc.address.region}</Badge> : null}
+                  </div>
+                  {selectedCompanyDoc.industry ? (
+                    <div className="text-xs text-gray-600">{selectedCompanyDoc.industry}</div>
+                  ) : null}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <KpiCard title="Jobs totales" value={clampInt(selectedCompanyStats?.jobsTotal, 0)} />
+                  <KpiCard title="Postulaciones" value={clampInt(selectedCompanyStats?.applicationsTotal, 0)} />
+                  <KpiCard title="Activos" value={clampInt(selectedCompanyStats?.jobsActive, 0)} />
+                  <KpiCard title="Contrataciones" value={clampInt(selectedCompanyStats?.hiresTotal, 0)} />
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 pt-2 border-t border-gray-100">
+                  <div>
+                    <div className={labelBase}>Admin email</div>
+                    <div className="text-sm text-gray-800 break-all">{selectedCompanyDoc.adminEmail || "—"}</div>
+                  </div>
+                  <div>
+                    <div className={labelBase}>Email contacto</div>
+                    <div className="text-sm text-gray-800 break-all">{selectedCompanyDoc.contactEmail || "—"}</div>
+                  </div>
+                  <div>
+                    <div className={labelBase}>Ubicación</div>
+                    <div className="text-sm text-gray-800">
+                      {[selectedCompanyDoc.address?.city, selectedCompanyDoc.address?.region].filter(Boolean).join(", ") || "—"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-gray-100 space-y-2">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (!selectedCompanyId) return;
+                          await updateDoc(doc(db, "companies", selectedCompanyId), {
+                            status: "Overdue",
+                            updatedAt: serverTimestamp(),
+                          } as any);
+                          alert("Empresa marcada como morosa.");
+                        } catch (e: any) {
+                          console.error(e);
+                          alert("No se pudo actualizar estado: " + (e?.message || e));
+                        }
+                      }}
+                      className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+                    >
+                      Marcar morosa
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (!selectedCompanyId) return;
+                          await updateDoc(doc(db, "companies", selectedCompanyId), {
+                            status: "Active",
+                            updatedAt: serverTimestamp(),
+                          } as any);
+                          alert("Empresa marcada al día.");
+                        } catch (e: any) {
+                          console.error(e);
+                          alert("No se pudo actualizar estado: " + (e?.message || e));
+                        }
+                      }}
+                      className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                    >
+                      Marcar al día
+                    </button>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => openBillingModal("invoice")}
+                      className="flex-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100"
+                    >
+                      + Factura
+                    </button>
+                    <button
+                      onClick={() => openBillingModal("payment")}
+                      className="flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+                    >
+                      + Pago
+                    </button>
+                    
+
+</div>
+                </div>
+
+                
+                {/* Comunicaciones */}
+                <div className="pt-3 border-t border-gray-100">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-gray-900">Comunicaciones</div>
+                    <div className="text-xs text-gray-500">Plantillas + envío</div>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <select
+                      value={commsQuickTemplate}
+                      onChange={(e) => setCommsQuickTemplate(e.target.value as any)}
+                      className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+                      title="Plantilla"
+                    >
+                      <option value="overdue">Morosidad</option>
+                      <option value="suspension">Aviso suspensión</option>
+                      <option value="low_activity">Baja actividad</option>
+                      <option value="holiday">Felices fiestas</option>
+                      <option value="custom">Personalizado</option>
+                    </select>
+
+                    <button
+                      onClick={() => openCommsModal(commsQuickTemplate)}
+                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100"
+                      title="Enviar comunicación"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Mail size={16} />
+                        Enviar comunicación
+                      </span>
+                    </button>
+                  </div>
+                </div>
+{/* Billing history */}
+                <div className="pt-3 border-t border-gray-100">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-gray-900">Historial de pagos / facturas</div>
+                    <Badge>{loadingBilling ? "Cargando…" : `Registros: ${billingRecords.length}`}</Badge>
+                  </div>
+                  <div className="mt-3 rounded-xl border border-gray-200 overflow-hidden bg-white">
+                    <table className="w-full text-left">
+                      <thead className="text-[11px] uppercase text-gray-500 bg-gray-50">
+                        <tr>
+                          <th className="p-3">Tipo</th>
+                          <th className="p-3">Monto</th>
+                          <th className="p-3">Estado</th>
+                          <th className="p-3">Fechas</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {billingRecords.map((r) => (
+                          <tr key={r.id} className="text-sm">
+                            <td className="p-3 font-semibold text-gray-900">
+                              {r.type === "invoice" ? "Factura" : "Pago"}
+                              {r.invoiceNumber ? <span className="ml-2 text-xs text-gray-500">#{r.invoiceNumber}</span> : null}
+                            </td>
+                            <td className="p-3 text-gray-800">
+                              {formatMoney(r.amount, r.currency)}
+                            </td>
+                            <td className="p-3">
+                              {r.status === "paid" ? (
+                                <span className="inline-flex items-center gap-1 text-emerald-700">
+                                  <TrendingUp size={14} /> Pagado
+                                </span>
+                              ) : r.status === "overdue" ? (
+                                <span className="inline-flex items-center gap-1 text-red-700">
+                                  <AlertTriangle size={14} /> Vencido
+                                </span>
+                              ) : (
+                                <span className="text-gray-600">Pendiente</span>
+                              )}
+                            </td>
+                            <td className="p-3 text-xs text-gray-600">
+                              {r.issueDate ? `Emisión: ${r.issueDate}` : ""}
+                              {r.dueDate ? ` · Vence: ${r.dueDate}` : ""}
+                              {r.paidDate ? ` · Pagado: ${r.paidDate}` : ""}
+                            </td>
+                          </tr>
+                        ))}
+                        {!loadingBilling && billingRecords.length === 0 && (
+                          <tr>
+                            <td className="p-6 text-sm text-gray-600" colSpan={4}>
+                              Sin historial aún. Usa <b>+ Factura</b> o <b>+ Pago</b> para comenzar.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    Idea: con este historial podrás ver si una empresa es constante o recurrentemente morosa (tendencia de cumplimiento).
+                  </div>
+                </div>
+
+                <div className="text-xs text-gray-500">
+                  Nota: si <code className="bg-gray-100 px-1 rounded">stats_companies</code> no existe aún, los KPIs aparecen en 0 hasta que se desplieguen las Functions de agregación.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderRequests() {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+        <div className="text-lg font-semibold text-gray-900">Solicitudes / Leads</div>
+        <div className="mt-2 text-sm text-gray-600">
+          En tu App.tsx, esto viene desde estado local <Badge>leads</Badge>. Si quieres, luego lo migramos a Firestore.
+        </div>
+
+        <div className="mt-4">
+          <Badge>Total: {props.leads?.length || 0}</Badge>
+          <div className="mt-3 max-h-[60vh] overflow-auto rounded-xl border border-gray-200">
+            <table className="w-full text-left">
+              <thead className="text-xs uppercase text-gray-500 bg-gray-50">
+                <tr>
+                  <th className="p-3">Empresa</th>
+                  <th className="p-3">Contacto</th>
+                  <th className="p-3">Estado</th>
+                  <th className="p-3">Fecha</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {(props.leads || []).map((l: any) => (
+                  <tr key={l.id || `${l.companyName}-${l.timestamp}`}>
+                    <td className="p-3 font-semibold text-gray-900">{l.companyName || "—"}</td>
+                    <td className="p-3 text-sm text-gray-600">{l.email || l.phone || "—"}</td>
+                    <td className="p-3 text-sm">{l.status || "PENDING"}</td>
+                    <td className="p-3 text-sm text-gray-600">{l.timestamp || "—"}</td>
+                  </tr>
+                ))}
+                {(props.leads || []).length === 0 && (
+                  <tr>
+                    <td className="p-6 text-sm text-gray-600" colSpan={4}>
+                      Sin solicitudes registradas en esta sesión.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-      {activeTab === 'OVERVIEW' && renderOverview()}
-      {activeTab === 'COMPANIES' && renderCompanies()}
-      {activeTab === 'REQUESTS' && renderRequests()}
-      {activeTab === 'SETTINGS' && renderSettings()}
+    );
+  }
+
+  function renderSettings() {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-6">
+        <div>
+          <div className="text-lg font-semibold text-gray-900">Configuración</div>
+          <div className="mt-2 text-sm text-gray-600">
+            Ajustes operativos del SuperAdmin. En MVP, estos viven en estado local.
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="rounded-2xl border border-gray-200 p-4">
+            <div className="font-semibold text-gray-900">Modo Demo</div>
+            <div className="mt-2 text-sm text-gray-600">
+              Esto afecta datasets mock del UI (no Firestore).
+            </div>
+            <button
+              onClick={() => props.onToggleDemo(!props.isDemoMode)}
+              className={
+                "mt-3 w-full rounded-xl px-4 py-2 text-sm font-semibold " +
+                (props.isDemoMode
+                  ? "bg-gray-900 text-white hover:bg-black"
+                  : "bg-gray-100 text-gray-800 hover:bg-gray-200")
+              }
+            >
+              {props.isDemoMode ? "Demo ACTIVO" : "Demo INACTIVO"}
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-gray-200 p-4 md:col-span-2">
+            <div className="font-semibold text-gray-900">Contactos operativos</div>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <div className={labelBase}>WhatsApp</div>
+                <input
+                  className={inputBase}
+                  value={props.adminConfig?.whatsappNumber || ""}
+                  onChange={(e) =>
+                    props.setAdminConfig((prev: any) => ({ ...(prev || {}), whatsappNumber: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <div className={labelBase}>Email notificaciones</div>
+                <input
+                  className={inputBase}
+                  value={props.adminConfig?.notificationEmail || ""}
+                  onChange={(e) =>
+                    props.setAdminConfig((prev: any) => ({ ...(prev || {}), notificationEmail: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="md:col-span-2">
+                <div className={labelBase}>Soporte</div>
+                <input
+                  className={inputBase}
+                  value={props.adminConfig?.supportTeam || ""}
+                  onChange={(e) =>
+                    props.setAdminConfig((prev: any) => ({ ...(prev || {}), supportTeam: e.target.value }))
+                  }
+                />
+              </div>
+            </div>
+            <div className="mt-3 text-xs text-gray-500">
+              Si quieres persistir esto en Firestore (y versionarlo), lo dejamos en <code className="bg-gray-100 px-1 rounded">admin/config</code>.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --------- Layout with tabs ---------
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-emerald-50 via-white to-white font-sans">
+      {/* Header */}
+      <header className="border-b border-emerald-100/60 bg-white/70 backdrop-blur">
+        <div className="h-1 w-full bg-gradient-to-r from-emerald-700 via-emerald-600 to-emerald-500" />
+        <div className="mx-auto max-w-7xl px-4 py-5 flex items-center justify-between gap-3">
+          <div className="min-w-0 flex items-center gap-3">
+            <div className="h-11 w-11 rounded-2xl bg-emerald-600 flex items-center justify-center shadow-sm">
+              <Leaf className="text-white" size={22} />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <div className="text-xl md:text-2xl font-black tracking-tight text-gray-900">
+                  Agro<span className="text-emerald-700">Connect</span>
+                </div>
+                <span className="hidden sm:inline-flex text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
+                  SUPERADMIN
+                </span>
+              </div>
+              <div className="text-sm text-gray-600">
+                Administración global · métricas · actividad · FinOps
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {props.onBack ? (
+              <button
+                onClick={props.onBack}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+              >
+                Volver
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </header>
+
+      {/* Tabs */}
+      <div className="mx-auto max-w-7xl px-4 py-4">
+        <div className="inline-flex rounded-2xl border border-emerald-100 bg-white/90 p-1 shadow-sm">
+          <button
+            onClick={() => setActiveTab("OVERVIEW")}
+            className={
+              "px-4 py-2 rounded-xl text-sm font-semibold transition " +
+              (activeTab === "OVERVIEW" ? "bg-emerald-600 text-white shadow" : "text-gray-700 hover:bg-emerald-50")
+            }
+          >
+            Dashboard
+          </button>
+          <button
+            onClick={() => setActiveTab("COMPANIES")}
+            className={
+              "px-4 py-2 rounded-xl text-sm font-semibold transition " +
+              (activeTab === "COMPANIES" ? "bg-emerald-600 text-white shadow" : "text-gray-700 hover:bg-emerald-50")
+            }
+          >
+            Empresas
+          </button>
+          <button
+            onClick={() => setActiveTab("REQUESTS")}
+            className={
+              "px-4 py-2 rounded-xl text-sm font-semibold transition " +
+              (activeTab === "REQUESTS" ? "bg-emerald-600 text-white shadow" : "text-gray-700 hover:bg-emerald-50")
+            }
+          >
+            Solicitudes
+          </button>
+          <button
+            onClick={() => setActiveTab("SETTINGS")}
+            className={
+              "px-4 py-2 rounded-xl text-sm font-semibold transition " +
+              (activeTab === "SETTINGS" ? "bg-emerald-600 text-white shadow" : "text-gray-700 hover:bg-emerald-50")
+            }
+          >
+            Configuración
+          </button>
+        </div>
+
+        <div className="mt-4">
+          {activeTab === "OVERVIEW" && renderExecutiveAndActivity()}
+          {activeTab === "COMPANIES" && renderCompanies()}
+          {activeTab === "REQUESTS" && renderRequests()}
+          {activeTab === "SETTINGS" && renderSettings()}
+        </div>
+      </div>
+
+      {/* Modal (Create/Edit Company) */}
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white w-full max-w-3xl rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+              <div className="font-semibold text-gray-900">
+                {modalMode === "create" ? "Crear nueva empresa" : "Editar empresa"}
+              </div>
+              <button
+                onClick={() => setModalOpen(false)}
+                className="rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="p-5 space-y-5 max-h-[80vh] overflow-y-auto">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <div className={labelBase}>NOMBRE</div>
+                  <input
+                    className={inputBase}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Ej: Agrícola Los Andes"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>RUT (FACTURACIÓN)</div>
+                  <input
+                    className={inputBase}
+                    value={rut}
+                    onChange={(e) => setRut(e.target.value)}
+                    placeholder="Ej: 12.345.678-5"
+                  />
+                  <div className={helpBase}>Se valida formato (no DV).</div>
+                </div>
+
+                <div>
+                  <div className={labelBase}>RUBRO</div>
+                  <input
+                    className={inputBase}
+                    value={industry}
+                    onChange={(e) => setIndustry(e.target.value)}
+                    placeholder="Ej: Frutícola / Packing"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <div className={labelBase}>DESCRIPCIÓN BREVE</div>
+                  <textarea
+                    className={inputBase}
+                    rows={3}
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Ej: Empresa dedicada a cosecha y packing en la Región del Maule."
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>RAZÓN SOCIAL (OPCIONAL)</div>
+                  <input
+                    className={inputBase}
+                    value={legalName}
+                    onChange={(e) => setLegalName(e.target.value)}
+                    placeholder="Ej: Agrícola Los Andes SpA"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>SITIO WEB (OPCIONAL)</div>
+                  <input
+                    className={inputBase}
+                    value={website}
+                    onChange={(e) => setWebsite(e.target.value)}
+                    placeholder="Ej: https://empresa.cl"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>EMAIL FACTURACIÓN (OPCIONAL)</div>
+                  <input
+                    className={inputBase}
+                    value={billingEmail}
+                    onChange={(e) => setBillingEmail(e.target.value)}
+                    placeholder="Si vacío, usa email contacto"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>TAGS (OPCIONAL)</div>
+                  <input
+                    className={inputBase}
+                    value={tagsInput}
+                    onChange={(e) => setTagsInput(e.target.value)}
+                    placeholder="Ej: packing, cosecha"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>EMAIL CONTACTO</div>
+                  <input
+                    className={inputBase}
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
+                    placeholder="contacto@empresa.cl"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>TELÉFONO</div>
+                  <input
+                    className={inputBase}
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+56912345678"
+                  />
+                  <div className={helpBase}>Se normaliza a +56 cuando aplica.</div>
+                </div>
+
+                <div className="md:col-span-2">
+                  <div className={labelBase}>DIRECCIÓN</div>
+                  <input
+                    className={inputBase}
+                    value={addressLine1}
+                    onChange={(e) => setAddressLine1(e.target.value)}
+                    placeholder="Ej: Camino a Pencahue km 3, Parcela 12"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>CIUDAD/COMUNA</div>
+                  <input
+                    className={inputBase}
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    placeholder="Ej: Talca"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>REGIÓN</div>
+                  <input
+                    className={inputBase}
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    placeholder="Ej: Maule"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>ADMIN EMAIL (EMPRESA)</div>
+                  <input
+                    className={inputBase}
+                    value={adminEmail}
+                    onChange={(e) => setAdminEmail(e.target.value)}
+                    placeholder="admin@empresa.cl"
+                  />
+                </div>
+
+                <div>
+                  <div className={labelBase}>PLAN</div>
+                  <select className={inputBase} value={plan} onChange={(e) => setPlan(e.target.value as SubscriptionPlan)}>
+                    <option value="Basic">Basic</option>
+                    <option value="Pro">Pro</option>
+                    <option value="Enterprise">Enterprise</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className={labelBase}>ESTADO</div>
+                  <select className={inputBase} value={status} onChange={(e) => setStatus(e.target.value as CompanyStatus)}>
+                    <option value="Active">Active</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Suspended">Suspended</option>
+                    <option value="Overdue">Morosa</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
+                <button
+                  onClick={() => setModalOpen(false)}
+                  className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  disabled={saving}
+                  onClick={handleSaveCompany}
+                  className="rounded-xl bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {saving ? "Guardando..." : modalMode === "create" ? "Crear" : "Guardar cambios"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal (Billing record) */}
+      {billingModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+              <div className="font-semibold text-gray-900">
+                {billingType === "invoice" ? "Registrar factura" : "Registrar pago"}
+              </div>
+              <button
+                onClick={() => setBillingModalOpen(false)}
+                className="rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <div className={labelBase}>Monto</div>
+                  <input className={inputBase} value={billingAmount} onChange={(e) => setBillingAmount(e.target.value)} placeholder="ej: 250000" />
+                </div>
+                <div>
+                  <div className={labelBase}>Moneda</div>
+                  <select className={inputBase} value={billingCurrency} onChange={(e) => setBillingCurrency(e.target.value as any)}>
+                    <option value="CLP">CLP</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+
+                {billingType === "invoice" ? (
+                  <>
+                    <div>
+                      <div className={labelBase}>Fecha emisión</div>
+                      <input className={inputBase} value={billingIssueDate} onChange={(e) => setBillingIssueDate(e.target.value)} placeholder="YYYY-MM-DD" />
+                    </div>
+                    <div>
+                      <div className={labelBase}>Fecha vencimiento</div>
+                      <input className={inputBase} value={billingDueDate} onChange={(e) => setBillingDueDate(e.target.value)} placeholder="YYYY-MM-DD" />
+                    </div>
+                  </>
+                ) : (
+                  <div className="md:col-span-2">
+                    <div className={labelBase}>Fecha pago</div>
+                    <input className={inputBase} value={billingPaidDate} onChange={(e) => setBillingPaidDate(e.target.value)} placeholder="YYYY-MM-DD" />
+                  </div>
+                )}
+
+                <div>
+                  <div className={labelBase}>Nº factura / referencia</div>
+                  <input className={inputBase} value={billingInvoiceNumber} onChange={(e) => setBillingInvoiceNumber(e.target.value)} placeholder="opcional" />
+                </div>
+                <div>
+                  <div className={labelBase}>Nota</div>
+                  <input className={inputBase} value={billingNote} onChange={(e) => setBillingNote(e.target.value)} placeholder="opcional" />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
+                <button
+                  onClick={() => setBillingModalOpen(false)}
+                  className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  disabled={billingSaving}
+                  onClick={handleAddBillingRecord}
+                  className="rounded-xl bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {billingSaving ? "Guardando..." : "Guardar"}
+                </button>
+              </div>
+
+              <div className="text-xs text-gray-500">
+                Consejo: registra facturas con fecha de vencimiento; si queda vencida, la empresa se marca como morosa automáticamente.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal (Comms outbox) */}
+      {commsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+              <div className="font-semibold text-gray-900">Enviar comunicación</div>
+              <button
+                onClick={() => setCommsModalOpen(false)}
+                className="rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <div className={labelBase}>Plantilla</div>
+                  <select
+                    className={inputBase}
+                    value={commsTemplate}
+                    onChange={(e) => {
+                      const k = e.target.value as any;
+                      setCommsTemplate(k);
+                      if (selectedCompanyDoc) {
+                        const d = templateDefaults(k, selectedCompanyDoc);
+                        setCommsSubject(d.subject);
+                        setCommsText(d.text);
+                      }
+                    }}
+                  >
+                    <option value="overdue">Morosidad</option>
+                    <option value="suspension">Aviso suspensión</option>
+                    <option value="low_activity">Baja actividad</option>
+                    <option value="holiday">Felices fiestas</option>
+                    <option value="custom">Personalizado</option>
+                  </select>
+                </div>
+                <div>
+                  <div className={labelBase}>Destinatario</div>
+                  <input
+                    className={inputBase}
+                    value={(selectedCompanyDoc?.billingEmail || selectedCompanyDoc?.contactEmail || selectedCompanyDoc?.adminEmail || "") as any}
+                    readOnly
+                  />
+                </div>
+                <div>
+                  <div className={labelBase}>Remitente</div>
+                  <select className={inputBase} value={commsFromMode} onChange={(e) => setCommsFromMode(e.target.value as any)}>
+                    <option value="brand">administracion@agroconnecto.cl</option>
+                    <option value="me">{me?.email || "tu usuario"}</option>
+                  </select>
+                  <div className="mt-1 text-xs text-gray-500">
+                    Se encola en <code>comms_outbox</code>. El proveedor de correo debe autorizar el <b>From</b>.
+                  </div>
+                </div>
+
+              </div>
+
+              <div>
+                <div className={labelBase}>Asunto</div>
+                <input className={inputBase} value={commsSubject} onChange={(e) => setCommsSubject(e.target.value)} />
+              </div>
+              <div>
+                <div className={labelBase}>Mensaje</div>
+                <textarea className={inputBase} rows={8} value={commsText} onChange={(e) => setCommsText(e.target.value)} />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
+                <button
+                  onClick={() => setCommsModalOpen(false)}
+                  className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  disabled={commsSending}
+                  onClick={handleSendComms}
+                  className="rounded-xl bg-gray-900 px-5 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-60"
+                >
+                  {commsSending ? "Encolando..." : "Enviar"}
+                </button>
+              </div>
+
+              <div className="text-xs text-gray-500">
+                Esto crea un registro en <code className="bg-gray-100 px-1 rounded">comms_outbox</code>. Luego lo conectamos a un servicio de email (SendGrid / Trigger Email).
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
+}
 
-export default AdminPanel;
+function formatMoney(amount: number, currency: "CLP" | "USD") {
+  try {
+    const fmt = new Intl.NumberFormat("es-CL", {
+      style: "currency",
+      currency: currency === "USD" ? "USD" : "CLP",
+      maximumFractionDigits: currency === "USD" ? 2 : 0,
+    });
+    return fmt.format(amount);
+  } catch {
+    return `${amount} ${currency}`;
+  }
+}
+
+/**
+ * TopCompaniesList: versión MVP sin dependencias extra.
+ * Nota: para ranking real, usamos stats_companies si está poblado.
+ * Si aún no, muestra últimas empresas creadas como proxy.
+ */
+function TopCompaniesList({ companies }: { companies: CompanyRow[] }) {
+  const top = useMemo(() => companies.slice(0, 10), [companies]);
+  return (
+    <div className="mt-3 space-y-2">
+      {top.map((c) => (
+        <div key={c.id} className="rounded-xl border border-gray-200 p-3 bg-white">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="font-semibold text-gray-900 truncate">{c.name}</div>
+              <div className="text-xs text-gray-600 truncate">
+                {(c.region || "—") + (c.industry ? " · " + c.industry : "")}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <StatusBadge status={(c.status as any) || "Active"} />
+            </div>
+          </div>
+        </div>
+      ))}
+      {top.length === 0 && <div className="text-sm text-gray-600">Sin empresas.</div>}
+    </div>
+  );
+}

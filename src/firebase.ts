@@ -1,11 +1,12 @@
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import { getFirestore, type Firestore } from "firebase/firestore";
 import { getAuth, type Auth } from "firebase/auth";
+import { getFunctions, httpsCallable, type Functions } from "firebase/functions";
 
 /**
  * Inicialización central de Firebase (una sola fuente de verdad).
  * - Evita doble init en Vite/HMR
- * - Exporta app, db, auth para imports consistentes
+ * - Exporta app, db, auth (y helpers) para imports consistentes
  *
  * Proyecto: agroconnect-10-14242150-423d4
  */
@@ -21,3 +22,23 @@ const firebaseConfig = {
 export const app: FirebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 export const db: Firestore = getFirestore(app);
 export const auth: Auth = getAuth(app);
+
+// Cloud Functions (para aprovisionamiento seguro de roles/usuarios)
+export const functions: Functions = getFunctions(app);
+
+/**
+ * Sincroniza el acceso del usuario autenticado:
+ * - Si su email coincide con adminEmail de alguna empresa => role=company_admin + companyId
+ * - Si no coincide => role=worker (por defecto)
+ *
+ * Esta lógica corre del lado servidor (Cloud Function) para NO depender de reglas ni exponer privilegios.
+ */
+export async function syncUserAccess(): Promise<{
+  ok: boolean;
+  role: "company_admin" | "worker" | "none";
+  companyId: string | null;
+}> {
+  const fn = httpsCallable(functions, "syncUserAccess");
+  const res = await fn({});
+  return res.data as any;
+}

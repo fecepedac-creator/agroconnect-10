@@ -4,6 +4,8 @@ import { JobOffer, Company } from '../types';
 import { generateJobDescription } from '../services/geminiService';
 import { getCurrentPosition } from '../services/geolocationService';
 import { applicantStore, Applicant } from '../services/applicantStore';
+import { db } from '../firebase';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp } from 'firebase/firestore';
 // Added ThumbsUp to imports
 import { 
   Plus, 
@@ -58,6 +60,50 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
   });
 
   const isSuspended = currentCompany?.status === 'Overdue';
+
+  // --- Firestore sync: companies/{companyId}/jobs ---
+  useEffect(() => {
+    if (!currentCompany?.id) return;
+
+    const q = query(
+      collection(db, 'companies', currentCompany.id, 'jobs'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => {
+          const data: any = d.data();
+          return {
+            id: d.id,
+            title: data.title ?? '',
+            description: data.description ?? '',
+            workersNeeded: data.workersNeeded ?? 1,
+            workersFilled: data.workersFilled ?? 0,
+            startDate: data.startDate ?? '',
+            location: data.location ?? '',
+            coordinates: data.coordinates ?? data.coordinates ?? { lat: -33.4489, lng: -70.6693 },
+            isActive: data.isActive ?? false,
+            jobStatus: data.jobStatus ?? (data.isActive ? 'active' : 'future'),
+            qrCodeUrl: data.qrCodeUrl ?? '',
+            category: data.category ?? 'Otros',
+            paymentType: data.paymentType ?? 'Al Día',
+            benefits: data.benefits ?? { transport: false, lunch: false },
+            transportInfo: data.transportInfo ?? '',
+            otherBenefits: data.otherBenefits ?? '',
+          } as JobOffer;
+        });
+        setJobs(list);
+      },
+      (err) => {
+        console.error(err);
+        // Si hay rules insuficientes, lo verás aquí
+      }
+    );
+
+    return () => unsub();
+  }, [currentCompany?.id, setJobs]);
 
   const handleGenerateAI = async () => {
     // Validamos que al menos tengamos título y ubicación básica para dar contexto a la IA
@@ -116,42 +162,66 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
     setNewJob(prev => ({ ...prev, lat, lng }));
   };
 
-  const handleCreateJob = () => {
+  const handleCreateJob = async () => {
     if (!newJob.title || !newJob.description) {
       alert("Completa el título y la descripción antes de publicar.");
       return;
     }
-    const finalCoords = (newJob.lat && newJob.lng) ? { lat: newJob.lat, lng: newJob.lng } : { lat: -33.4489, lng: -70.6693 };
-    const job: JobOffer = {
-      id: `job-${Date.now()}`,
-      title: newJob.title || '',
-      description: newJob.description || '',
-      workersNeeded: newJob.workersNeeded || 1,
-      workersFilled: 0,
-      startDate: newJob.startDate || '',
-      location: newJob.location || '',
-      coordinates: finalCoords,
-      isActive: false,
-      jobStatus: 'future',
-      qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=AgroConnect-${Date.now()}`,
-      category: newJob.category as any,
-      paymentType: newJob.paymentType as any,
-      benefits: newJob.benefits,
-      transportInfo: newJob.transportInfo,
-      otherBenefits: newJob.otherBenefits
-    };
-    const updated = [job, ...jobs];
-    setJobs(updated);
-    localStorage.setItem('agroconnect_jobs', JSON.stringify(updated));
-    setShowForm(false);
-    setActiveTab('future');
-    setNewJob({ 
-      title: '', description: '', workersNeeded: 10, startDate: new Date().toISOString().split('T')[0], 
-      location: '', category: 'Cosecha', paymentType: 'Al Día', 
-      benefits: { transport: false, lunch: false }, transportInfo: '', otherBenefits: '',
-      lat: -34.985, lng: -71.239
-    });
+    
+    const finalCoords =
+      newJob.lat && newJob.lng
+        ? { lat: newJob.lat, lng: newJob.lng }
+        : { lat: -33.4489, lng: -70.6693 };
+
+    if (!currentCompany?.id) {
+      alert("No hay empresa activa. Vuelve a iniciar sesión como empresa.");
+      return;
+    }
+
+    try {
+      const payload = {
+        title: newJob.title || '',
+        description: newJob.description || '',
+        workersNeeded: newJob.workersNeeded || 1,
+        workersFilled: 0,
+        startDate: newJob.startDate || '',
+        location: newJob.location || '',
+        coordinates: finalCoords,
+        isActive: false,
+        jobStatus: 'future',
+        qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=AgroConnect-${Date.now()}`,
+        category: newJob.category as any,
+        paymentType: newJob.paymentType as any,
+        benefits: newJob.benefits,
+        transportInfo: newJob.transportInfo,
+        otherBenefits: newJob.otherBenefits,
+        createdAt: serverTimestamp(),
+      };
+
+      await addDoc(collection(db, 'companies', currentCompany.id, 'jobs'), payload);
+
+      setShowForm(false);
+      setActiveTab('future');
+      setNewJob({
+        title: '',
+        description: '',
+        workersNeeded: 10,
+        startDate: new Date().toISOString().split('T')[0],
+        location: '',
+        category: 'Cosecha',
+        paymentType: 'Al Día',
+        benefits: { transport: false, lunch: false },
+        transportInfo: '',
+        otherBenefits: '',
+        lat: -34.985,
+        lng: -71.239,
+      });
+    } catch (error: any) {
+      console.error(error);
+      alert(`No se pudo publicar la oferta: ${error?.message || error}`);
+    }
   };
+
 
   const filteredJobs = jobs.filter(j => (j.jobStatus || 'active') === activeTab);
 
@@ -322,7 +392,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
             </div>
             <div className="bg-gray-50 p-4 flex gap-2 border-t border-gray-100">
               <button className="flex-1 bg-white border border-gray-200 text-[10px] font-black uppercase tracking-widest py-2.5 rounded-xl hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all shadow-sm">Postulantes</button>
-              <button onClick={() => {if(confirm("¿Eliminar?")) setJobs(jobs.filter(j => j.id !== job.id))}} className="p-2.5 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
+              <button onClick={async () => { if(!confirm('¿Eliminar?')) return; if(!currentCompany?.id) return; try { await deleteDoc(doc(db, 'companies', currentCompany.id, 'jobs', job.id)); } catch(e:any){ console.error(e); alert(`No se pudo eliminar: ${e?.message || e}`);} }} className="p-2.5 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
             </div>
           </div>
         ))}
