@@ -151,14 +151,15 @@ const App: React.FC = () => {
         baseRef,
         where("status", "==", "active"),
         where("visibility", "==", "public"),
-        orderBy("name", "asc"),
-        limit(200)
+        orderBy("name", "asc")
       );
 
       try {
         const snap = await getDocs(orderedQuery);
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
         setCompanies(list);
+        // eslint-disable-next-line no-console
+        console.info(`[Empresas] Cargadas ${list.length} compañías públicas activas.`);
         return;
       } catch (e: any) {
         const msg = String(e?.message || "");
@@ -167,16 +168,13 @@ const App: React.FC = () => {
           throw e;
         }
         // fallback sin orderBy si falta índice
-        const fallbackQuery = query(
-          baseRef,
-          where("status", "==", "active"),
-          where("visibility", "==", "public"),
-          limit(200)
-        );
+        const fallbackQuery = query(baseRef, where("status", "==", "active"), where("visibility", "==", "public"));
         const snap = await getDocs(fallbackQuery);
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
         list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), "es"));
         setCompanies(list);
+        // eslint-disable-next-line no-console
+        console.info(`[Empresas] Cargadas ${list.length} compañías (fallback sin índice).`);
       }
     } catch (e: any) {
       setCompanies([]);

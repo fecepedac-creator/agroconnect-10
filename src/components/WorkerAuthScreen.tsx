@@ -15,26 +15,39 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
   const [err, setErr] = useState<string | null>(null);
 
   // Login
-  const [rut, setRut] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
 
   // Register
   const [fullName, setFullName] = useState("");
   const [rutNew, setRutNew] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [pass1, setPass1] = useState("");
   const [pass2, setPass2] = useState("");
   const [terms, setTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const handleIdentifierChange = (value: string) => {
+    const raw = value.trim();
+    if (raw.includes("@")) {
+      setIdentifier(raw.toLowerCase());
+    } else {
+      setIdentifier(formatRut(raw));
+    }
+  };
+
   const handleLogin = async () => {
     setErr(null);
     setLoading(true);
     try {
-      if (!validateRut(rut)) {
+      if (!identifier.trim()) {
+        throw new Error("Ingresa tu RUT o Email.");
+      }
+      if (!identifier.includes("@") && !validateRut(identifier)) {
         throw new Error("El RUT ingresado no es válido.");
       }
-      await loginWorker(rut, password);
+      await loginWorker(identifier, password);
       onSuccess();
     } catch (e: any) {
       setErr(e?.message || "No se pudo iniciar sesión.");
@@ -46,12 +59,16 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
   const handleRegister = async () => {
     setErr(null);
 
-    if (!fullName.trim() || !rutNew.trim() || !phone.trim() || !pass1) {
+    if (!fullName.trim() || !rutNew.trim() || !phone.trim() || !email.trim() || !pass1) {
       setErr("Completa todos los campos requeridos.");
       return;
     }
     if (!validateRut(rutNew)) {
       setErr("El RUT ingresado no es válido.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setErr("Ingresa un email válido.");
       return;
     }
     if (pass1.length < 6) {
@@ -69,10 +86,19 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
 
     setLoading(true);
     try {
-      await registerWorker({ fullName, rut: rutNew, phone, password: pass1 });
+      await registerWorker({ fullName, rut: rutNew, phone, email, password: pass1 });
       onSuccess();
     } catch (e: any) {
-      setErr(e?.message || "No se pudo crear la cuenta.");
+      const code = String(e?.code || "");
+      if (code.includes("auth/email-already-in-use")) {
+        setErr("Este email ya está en uso.");
+      } else if (code.includes("auth/weak-password")) {
+        setErr("La contraseña es muy débil.");
+      } else if (code.includes("permission-denied")) {
+        setErr("No tienes permisos para crear el perfil. Contacta soporte.");
+      } else {
+        setErr(e?.message || "No se pudo crear la cuenta.");
+      }
     } finally {
       setLoading(false);
     }
@@ -124,10 +150,10 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
               <h2 className="text-lg font-extrabold text-gray-900">INGRESO TRABAJADOR</h2>
 
               <div className="mt-4 space-y-3">
-                 <input
-                  value={rut}
-                  onChange={(e) => setRut(formatRut(e.target.value))}
-                  placeholder="RUT (12.345.678-9)"
+                <input
+                  value={identifier}
+                  onChange={(e) => handleIdentifierChange(e.target.value)}
+                  placeholder="RUT o Email"
                   className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
                 />
                 <div className="relative">
@@ -168,6 +194,13 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
                   value={rutNew}
                   onChange={(e) => setRutNew(formatRut(e.target.value))}
                   placeholder="RUT (Ej: 12.345.678-9)"
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
+                />
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Email"
+                  type="email"
                   className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
                 />
                 <div className="flex gap-2">
@@ -243,7 +276,7 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
           )}
 
           <div className="mt-4 text-[11px] text-gray-500">
-            Nota: No pedimos correo. Tu RUT funciona como usuario. Si cambias de teléfono, podrás recuperar por soporte.
+            Nota: Pedimos correo para recuperación y seguimiento. Tu RUT sigue siendo un dato clave del perfil.
           </div>
         </div>
       </div>

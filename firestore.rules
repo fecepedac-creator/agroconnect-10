@@ -103,7 +103,12 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if signedIn() && uid == myUid();
-      allow create, update, delete: if isSuperAdmin();
+      allow create, update: if signedIn()
+        && uid == myUid()
+        && request.resource.data.role == "worker"
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 0;
+      allow delete: if isSuperAdmin();
     }
 
     /* ======================
@@ -149,7 +154,11 @@ service cloud.firestore {
        ====================== */
 
     match /workers/{uid} {
-      allow read, create, update: if signedIn() && uid == myUid();
+      allow read, create, update: if signedIn()
+        && uid == myUid()
+        && request.resource.data.role == "worker"
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 0;
       allow delete: if false;
     }
 

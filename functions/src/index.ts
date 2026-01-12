@@ -586,10 +586,22 @@ Incluye las notas de calidad de datos, y agrega otras si detectas inconsistencia
       throw new HttpsError("internal", "Respuesta de IA no es JSON válido.");
     }
 
+    const auditRef = db.collection("audits").doc();
+    await auditRef.set({
+      createdAt: FieldValue.serverTimestamp(),
+      inputs: metrics,
+      output: analysis,
+      meta: {
+        requestedByUid: user.uid,
+        requestedByEmail: user.token.email || null,
+      },
+    });
+
     return {
       ok: true,
       metrics,
       analysis,
+      auditId: auditRef.id,
     };
   }
 );
