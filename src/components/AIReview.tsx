@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { addDoc, collection, limit, onSnapshot, orderBy, query, serverTimestamp } from "firebase/firestore";
+import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { Bot, ShieldCheck, AlertCircle, RefreshCw, TrendingUp, Users, Briefcase } from "lucide-react";
 import { db, functions } from "../firebase";
@@ -52,7 +52,7 @@ const AIReview: React.FC = () => {
     try {
       const fn = httpsCallable(functions, "runOperationalAudit");
       const res = await fn({});
-      const payload = res.data as { metrics?: any; analysis?: AuditResult };
+      const payload = res.data as { metrics?: any; analysis?: AuditResult; auditId?: string };
 
       if (!payload?.analysis) {
         throw new Error("Respuesta inválida del análisis.");
@@ -60,19 +60,20 @@ const AIReview: React.FC = () => {
 
       setResult(payload.analysis);
       setLatestInputs(payload.metrics || null);
-
-      await addDoc(collection(db, "audits"), {
-        createdAt: serverTimestamp(),
-        inputs: payload.metrics || null,
-        output: payload.analysis,
-      });
+      if (payload.auditId) {
+        // eslint-disable-next-line no-console
+        console.info(`[Auditoría IA] Audit guardado: ${payload.auditId}`);
+      }
     } catch (e: any) {
       console.error("runOperationalAudit error:", e);
       const message = String(e?.message || "");
-      if (message.toLowerCase().includes("no configurada") || message.toLowerCase().includes("gemini")) {
+      const code = String(e?.code || "");
+      if (code.includes("failed-precondition") || message.toLowerCase().includes("no configurada")) {
         setError("IA no configurada aún. Configura GEMINI_API_KEY en Cloud Functions.");
+      } else if (code.includes("permission-denied")) {
+        setError("No tienes permisos para ejecutar la auditoría.");
       } else {
-        setError("No se pudo ejecutar el análisis. Revisa la consola para más detalles.");
+        setError(`No se pudo ejecutar el análisis. ${message || "Revisa la consola para más detalles."}`);
       }
     } finally {
       setLoading(false);

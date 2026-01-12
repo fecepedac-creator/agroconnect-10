@@ -32,6 +32,7 @@ export default function LoginScreen({
   const [q, setQ] = useState("");
   const [openLead, setOpenLead] = useState(false);
   const [leadFeedback, setLeadFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [leadError, setLeadError] = useState<string | null>(null);
 
   // Lead form
   const [leadCompanyName, setLeadCompanyName] = useState("");
@@ -142,22 +143,23 @@ export default function LoginScreen({
   const handleSendLead = async () => {
     setError(null);
     setLeadFeedback(null);
+    setLeadError(null);
 
     // Validación mínima
     if (!leadCompanyName.trim() || !leadRut.trim() || !leadEmail.trim()) {
-      setError("Completa al menos: Empresa, RUT y Email.");
+      setLeadError("Completa al menos: Empresa, RUT y Email.");
       return;
     }
 
     const emailOk = /^\S+@\S+\.\S+$/.test(leadEmail.trim());
     if (!emailOk) {
-      setError("El email no tiene un formato válido.");
+      setLeadError("El email no tiene un formato válido.");
       return;
     }
 
     const rutOk = /^[0-9kK.-]{7,15}$/.test(leadRut.trim());
     if (!rutOk) {
-      setError("El RUT no tiene un formato válido.");
+      setLeadError("El RUT no tiene un formato válido.");
       return;
     }
 
@@ -237,6 +239,14 @@ export default function LoginScreen({
 
   const hasCompanies = (companies || []).length > 0;
   const hasResults = (filteredCompanies || []).length > 0;
+
+  const companyPlaceholder = (company: Company) => {
+    const name = String(company?.name || "").trim();
+    if (!name) return "AC";
+    const parts = name.split(/\s+/).slice(0, 2);
+    const initials = parts.map((part) => part[0]).join("").toUpperCase();
+    return initials || "AC";
+  };
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -437,16 +447,20 @@ export default function LoginScreen({
                           <div>
                             <div className="text-lg font-extrabold text-gray-900">{c.name || "Empresa"}</div>
                             <div className="text-xs text-gray-500">
-                              {(c as any)?.rubro ? `Rubro: ${(c as any).rubro}` : ""}
-                              {(c as any)?.region ? ` • Región: ${(c as any).region}` : ""}
-                              {(c as any)?.rut ? ` • RUT: ${(c as any).rut}` : ""}
+                              {[
+                                (c as any)?.rubro ? `Rubro: ${(c as any).rubro}` : null,
+                                (c as any)?.region ? `Región: ${(c as any).region}` : null,
+                                (c as any)?.rut ? `RUT: ${(c as any).rut}` : null,
+                              ]
+                                .filter(Boolean)
+                                .join(" • ")}
                             </div>
                           </div>
                           <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center overflow-hidden">
                             {c.logoUrl ? (
-                              <img src={c.logoUrl} alt="Logo" className="w-full h-full object-cover" />
+                              <img src={c.logoUrl} alt={`Logo ${c.name || "Empresa"}`} className="w-full h-full object-cover" />
                             ) : (
-                              <span className="text-emerald-600 font-extrabold">AC</span>
+                              <span className="text-emerald-600 font-extrabold">{companyPlaceholder(c)}</span>
                             )}
                           </div>
                         </div>
@@ -524,6 +538,12 @@ export default function LoginScreen({
                       placeholder="Notas (opcional)"
                       className="w-full px-4 py-3 rounded-2xl border border-gray-200 min-h-[110px]"
                     />
+
+                    {leadError && (
+                      <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-2xl p-3">
+                        {leadError}
+                      </div>
+                    )}
 
                     <button
                       onClick={handleSendLead}
