@@ -6,11 +6,21 @@ import { UserRole, type Company, type Lead } from "../types";
 
 type Props = {
   companies: Company[];
+  companiesLoading?: boolean;
+  companiesError?: string | null;
+  onRetryCompanies?: () => void;
   onSelectRole: (role: UserRole, companyData?: Company) => void;
   onRegisterLead: (leadData: Omit<Lead, "id" | "timestamp" | "status">) => void;
 };
 
-export default function LoginScreen({ companies, onSelectRole, onRegisterLead }: Props) {
+export default function LoginScreen({
+  companies,
+  companiesLoading = false,
+  companiesError = null,
+  onRetryCompanies,
+  onSelectRole,
+  onRegisterLead,
+}: Props) {
   const [loading, setLoading] = useState<null | "worker" | "admin" | "companyAdmin">(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -200,6 +210,9 @@ export default function LoginScreen({ companies, onSelectRole, onRegisterLead }:
     });
   }, [companies, q]);
 
+  const hasCompanies = (companies || []).length > 0;
+  const hasResults = (filteredCompanies || []).length > 0;
+
   return (
     <div className="min-h-screen relative overflow-hidden">
       {/* Fondo dividido */}
@@ -351,43 +364,73 @@ export default function LoginScreen({ companies, onSelectRole, onRegisterLead }:
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(filteredCompanies || []).map((c: any) => (
-                  <div key={c.id} className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-lg font-extrabold text-gray-900">{c.name || "Empresa"}</div>
-                        <div className="text-xs text-gray-500">
-                          {(c as any)?.region ? `Región: ${(c as any).region}` : ""}
-                          {(c as any)?.rut ? ` • RUT: ${(c as any).rut}` : ""}
+              {companiesError && (
+                <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center justify-between gap-3">
+                  <span>{companiesError}</span>
+                  {onRetryCompanies && (
+                    <button
+                      onClick={onRetryCompanies}
+                      className="px-3 py-2 rounded-xl bg-amber-600 text-white font-bold hover:bg-amber-700"
+                    >
+                      Reintentar
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {companiesLoading && (
+                <div className="text-sm text-gray-500 bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                  Cargando empresas...
+                </div>
+              )}
+
+              {!companiesLoading && !companiesError && !hasCompanies && (
+                <div className="text-sm text-gray-600 bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                  No hay empresas adheridas aún.
+                </div>
+              )}
+
+              {!companiesLoading && !companiesError && hasCompanies && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {(filteredCompanies || []).map((c: any) => (
+                      <div key={c.id} className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-lg font-extrabold text-gray-900">{c.name || "Empresa"}</div>
+                            <div className="text-xs text-gray-500">
+                              {(c as any)?.region ? `Región: ${(c as any).region}` : ""}
+                              {(c as any)?.rut ? ` • RUT: ${(c as any).rut}` : ""}
+                            </div>
+                          </div>
+                          <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center overflow-hidden">
+                            {c.logoUrl ? (
+                              <img src={c.logoUrl} alt="Logo" className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-emerald-600 font-extrabold">AC</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex items-center justify-between gap-3">
+                          <button
+                            onClick={() => handleCompanyAdminLogin(c)}
+                            disabled={loading === "companyAdmin"}
+                            className="w-full rounded-2xl bg-blue-600 text-white font-extrabold py-3 hover:bg-blue-700 disabled:opacity-60"
+                          >
+                            {loading === "companyAdmin" ? "Conectando..." : "Ingresar como administrador"}
+                          </button>
                         </div>
                       </div>
-                      <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center overflow-hidden">
-                        {c.logoUrl ? (
-                          <img src={c.logoUrl} alt="Logo" className="w-full h-full object-cover" />
-                        ) : (
-                          <span className="text-emerald-600 font-extrabold">AC</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex items-center justify-between gap-3">
-                      <button
-                        onClick={() => handleCompanyAdminLogin(c)}
-                        disabled={loading === "companyAdmin"}
-                        className="w-full rounded-2xl bg-blue-600 text-white font-extrabold py-3 hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {loading === "companyAdmin" ? "Conectando..." : "Ingresar como administrador"}
-                      </button>
-                    </div>
+                    ))}
                   </div>
-                ))}
-              </div>
 
-              {(filteredCompanies || []).length === 0 && (
-                <div className="text-sm text-gray-500 bg-gray-50 border border-gray-100 rounded-2xl p-4">
-                  No se encontraron empresas con ese criterio.
-                </div>
+                  {!hasResults && (
+                    <div className="text-sm text-gray-500 bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                      No se encontraron empresas con ese criterio.
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
