@@ -4,7 +4,7 @@ import {
   onDocumentUpdated,
 } from "firebase-functions/v2/firestore";
 import { defineSecret } from "firebase-functions/params";
-import sgMail from "@sendgrid/mail";
+import nodemailer from "nodemailer";
 
 import * as admin from "firebase-admin";
 
@@ -13,11 +13,11 @@ admin.initializeApp();
 const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 
-// ===== Email (SendGrid) =====
-const SENDGRID_API_KEY = defineSecret("SENDGRID_API_KEY");
-const DEFAULT_FROM_EMAIL = "administracion@agroconnecto.cl";
+// ===== Email (Gmail SMTP) =====
+const GMAIL_APP_PASSWORD = defineSecret("GMAIL_APP_PASSWORD");
+const GMAIL_USER = "agroconnect@gmail.com";
+const GMAIL_REPLY_TO = "fecepedac@gmail.com";
 const DEFAULT_FROM_NAME = "AgroConnect";
-
 
 /**
  * =========================
@@ -337,10 +337,10 @@ export const onApplicationUpdated = onDocumentUpdated(
 );
 /**
  * =========================
- *  COMMS OUTBOX -> EMAIL (SendGrid)
+ *  COMMS OUTBOX -> EMAIL (Gmail SMTP)
  * =========================
  * Crea un documento en `comms_outbox` desde el dashboard (cliente).
- * Esta Function lo procesa y envía el email real usando SendGrid.
+ * Esta Function lo procesa y envía el email real usando Gmail SMTP.
  *
  * Importante:
  * - `comms_outbox` debe ser writeable SOLO para SuperAdmin (rules ya lo cubren).
@@ -353,9 +353,9 @@ export const onApplicationUpdated = onDocumentUpdated(
  *   subject: string,
  *   text?: string,
  *   html?: string,
- *   replyTo?: string,          // recomendado (email del superadmin o soporte)
- *   fromEmail?: string,        // legacy/compat (si existe, se usa como replyTo)
- *   fromName?: string,         // opcional
+ *   replyTo?: string,          // ignorado, reply-to fijo
+ *   fromEmail?: string,        // ignorado, from fijo
+ *   fromName?: string,         // opcional (si viene, se ignora para mantener from fijo)
  *   meta?: { companyId?: string, templateKey?: string, createdByUid?: string }
  * }
  */
@@ -363,7 +363,7 @@ export const sendEmailFromOutbox = onDocumentCreated(
   {
     document: "comms_outbox/{docId}",
     region: "us-central1",
-    secrets: [SENDGRID_API_KEY],
+    secrets: [GMAIL_APP_PASSWORD],
   },
   async (event) => {
     const snap = event.data;
@@ -397,67 +397,53 @@ export const sendEmailFromOutbox = onDocumentCreated(
     const text = data?.text ? String(data.text) : undefined;
     const html = data?.html ? String(data.html) : undefined;
 
-    const replyTo =
-      (data?.replyTo && String(data.replyTo).trim()) ||
-      (data?.fromEmail && String(data.fromEmail).trim()) ||
-      undefined;
-
-    const fromEmail =
-      (data?.fromEmail && String(data.fromEmail).trim()) || DEFAULT_FROM_EMAIL;
-
-    const fromName =
-      (data?.fromName && String(data.fromName).trim()) || DEFAULT_FROM_NAME;
-
     if (!to || !subject || (!text && !html)) {
       await ref.update({
         status: "error",
+        provider: "gmail",
         error: "Missing required fields: to, subject, and text/html",
-        errorAt: FieldValue.serverTimestamp(),
+        failedAt: FieldValue.serverTimestamp(),
       });
       return;
     }
 
     try {
-      sgMail.setApiKey(SENDGRID_API_KEY.value());
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: GMAIL_USER,
+          pass: GMAIL_APP_PASSWORD.value(),
+        },
+      });
 
-      const msg: any = {
+      const msg = {
         to,
-        from: { email: fromEmail, name: fromName }, // 'from' fijo (recomendado)
+        from: {
+          name: DEFAULT_FROM_NAME,
+          address: GMAIL_USER,
+        },
+        replyTo: GMAIL_REPLY_TO,
         subject,
         text,
         html,
       };
 
-      // Enviar "desde" administracion@..., pero permitir respuesta al superadmin
-      if (replyTo) {
-        msg.replyTo = replyTo;
-      }
-
-      // opcional: category para reportes SendGrid
-      if (data?.meta?.templateKey) {
-        msg.categories = [String(data.meta.templateKey)];
-      }
-
-      const [resp] = await sgMail.send(msg);
+      const info = await transporter.sendMail(msg);
 
       await ref.update({
         status: "sent",
         sentAt: FieldValue.serverTimestamp(),
-        provider: "sendgrid",
-        providerMessageId:
-          resp?.headers?.["x-message-id"] ||
-          resp?.headers?.["X-Message-Id"] ||
-          null,
+        provider: "gmail",
+        providerMessageId: info?.messageId || null,
       });
     } catch (e: any) {
-      const errMsg = e?.response?.body
-        ? JSON.stringify(e.response.body)
-        : String(e?.message ?? e);
+      const errMsg = String(e?.message ?? e);
 
       await ref.update({
         status: "error",
+        provider: "gmail",
         error: errMsg.slice(0, 1500),
-        errorAt: FieldValue.serverTimestamp(),
+        failedAt: FieldValue.serverTimestamp(),
       });
 
       // Lanza para que quede en logs / reintentos controlados por GCF

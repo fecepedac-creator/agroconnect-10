@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, limit, query, serverTimestamp, setDoc } from "firebase/firestore";
 import { db } from "./firebase";
 
 import {
@@ -38,7 +38,6 @@ import { Worker, JobOffer, AppView, UserRole, Company, Lead, AdminConfig } from 
 import {
   INITIAL_WORKERS,
   INITIAL_JOBS,
-  INITIAL_COMPANIES,
   MOCK_GLOBAL_WORKERS,
   ENHANCED_DEMO_WORKERS,
   ENHANCED_DEMO_GLOBAL,
@@ -60,7 +59,9 @@ const App: React.FC = () => {
   // Data State
   const [workers, setWorkers] = useState<Worker[]>(INITIAL_WORKERS);
   const [jobs, setJobs] = useState<JobOffer[]>(INITIAL_JOBS);
-  const [companies, setCompanies] = useState<Company[]>(INITIAL_COMPANIES);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companiesLoading, setCompaniesLoading] = useState(true);
+  const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [globalWorkers, setGlobalWorkers] = useState<Worker[]>(
     (ENHANCED_DEMO_GLOBAL as any) || ENHANCED_DEMO_WORKERS || MOCK_GLOBAL_WORKERS
   );
@@ -126,10 +127,27 @@ const App: React.FC = () => {
     setIsSidebarOpen(false);
   };
 
-  const isWorkerPortalRoute = /^\/(trabajos|worker|auth)(\/|$)/.test(window.location.pathname);
-  if (isWorkerPortalRoute) {
-    return <WorkerPortal onExit={handleLogout} />;
-  }
+  const loadCompanies = async () => {
+    setCompaniesLoading(true);
+    setCompaniesError(null);
+    try {
+      const q = query(collection(db, "companies"), limit(200));
+      const snap = await getDocs(q);
+      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
+      setCompanies(list);
+    } catch (e: any) {
+      setCompanies([]);
+      setCompaniesError("No se pudieron cargar las empresas. Intenta nuevamente.");
+      // eslint-disable-next-line no-console
+      console.error("loadCompanies error:", e);
+    } finally {
+      setCompaniesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadCompanies();
+  }, []);
 
   useEffect(() => {
     const loadAdminConfig = async () => {
@@ -170,7 +188,14 @@ const App: React.FC = () => {
   if (userRole === null) {
     return (
       <div className="min-h-screen bg-gray-50 font-sans">
-        <LoginScreen companies={companies} onSelectRole={handleRoleSelect} onRegisterLead={handleRegisterLead} />
+        <LoginScreen
+          companies={companies}
+          companiesLoading={companiesLoading}
+          companiesError={companiesError}
+          onRetryCompanies={loadCompanies}
+          onSelectRole={handleRoleSelect}
+          onRegisterLead={handleRegisterLead}
+        />
       </div>
     );
   }
@@ -221,64 +246,69 @@ const App: React.FC = () => {
 
           {userRole === UserRole.ADMIN && (
             <>
-              <NavItem view={AppView.ADMIN} icon={Sliders} label="SuperAdmin" />
-              <NavItem view={AppView.AI_REVIEW} icon={Bot} label="Revisión IA" />
+              <NavItem view={AppView.ADMIN} icon={LayoutDashboard} label="Panel SuperAdmin" />
+              <NavItem view={AppView.DASHBOARD} icon={LayoutDashboard} label="Dashboard" />
+              <NavItem view={AppView.GLOBAL_SEARCH} icon={Globe} label="Global Search" />
+              <NavItem view={AppView.WORKERS} icon={Users} label="Trabajadores" />
+              <NavItem view={AppView.JOBS} icon={Briefcase} label="Ofertas" />
+              <NavItem view={AppView.PUBLISH_OFFER} icon={PlusCircle} label="Publicar oferta" />
+              <NavItem view={AppView.BROADCASTS} icon={Megaphone} label="Difusiones" />
+              <NavItem view={AppView.SETTINGS_COMPANY} icon={Settings} label="Ajustes" />
+              <NavItem view={AppView.AI_REVIEW} icon={Bot} label="AI Review" />
+              <NavItem view={AppView.WORKER_AUTH} icon={Users} label="Worker Auth" />
             </>
           )}
 
-          {userRole === UserRole.WORKER && <NavItem view={AppView.WORKER_PORTAL} icon={Inbox} label="Portal Trabajador" />}
+          {userRole === UserRole.WORKER && (
+            <>
+              <NavItem view={AppView.WORKER_PORTAL} icon={LayoutDashboard} label="Portal" />
+              <NavItem view={AppView.WORKER_AUTH} icon={Users} label="Auth" />
+            </>
+          )}
         </nav>
+      </aside>
 
-        <div className="p-4 border-t border-gray-100 mt-auto">
+      <main className="flex-1 min-h-screen">
+        {/* Topbar */}
+        <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="lg:hidden text-gray-500 hover:text-gray-700"
+            >
+              <Menu size={22} />
+            </button>
+            <div className="text-sm text-gray-500">{currentCompany?.name}</div>
+          </div>
           <button
             onClick={handleLogout}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-50"
+            className="text-sm font-bold text-gray-500 hover:text-gray-700 flex items-center gap-2"
           >
             <LogOut size={16} />
             Salir
           </button>
         </div>
-      </aside>
 
-      <main className="flex-1 flex flex-col min-w-0">
-        <header className="sticky top-0 z-10 bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              className="lg:hidden rounded-xl border border-gray-200 bg-white p-2 hover:bg-gray-50"
-              onClick={() => setIsSidebarOpen((v) => !v)}
-            >
-              {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
-            </button>
-            <div className="text-sm text-gray-500">
-              {userRole === UserRole.COMPANY && currentCompany ? currentCompany.name : userRole}
-            </div>
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-auto p-6">
-          {/* DASHBOARD */}
-          {currentView === AppView.DASHBOARD &&
-            (userRole === UserRole.COMPANY && currentCompany ? (
-              <CompanyDashboard company={currentCompany} jobs={jobs} onNavigate={(view) => setCurrentView(view)} />
-            ) : (
-              <Dashboard workers={workers} jobs={jobs} globalWorkers={globalWorkers} onRadarClick={handleRadarClick} />
-            ))}
-
-          {/* COMPANY */}
+        {/* Content */}
+        <div className="p-6">
+          {currentView === AppView.DASHBOARD && (
+            <Dashboard
+              currentCompany={currentCompany}
+              jobs={jobs}
+              workers={workers}
+              onRadarClick={handleRadarClick}
+            />
+          )}
           {currentView === AppView.WORKERS && <Workers workers={workers} setWorkers={setWorkers} />}
-          {currentView === AppView.JOBS && <Jobs jobs={jobs} setJobs={setJobs} currentCompany={currentCompany} />}
-          {currentView === AppView.PUBLISH_OFFER && currentCompany && (
-            <PublishOffer company={currentCompany} onNavigate={(view) => setCurrentView(view)} />
+          {currentView === AppView.JOBS && <Jobs jobs={jobs} setJobs={setJobs} />}
+          {currentView === AppView.PUBLISH_OFFER && (
+            <PublishOffer
+              currentCompany={currentCompany}
+              jobs={jobs}
+              setJobs={setJobs}
+              workers={workers}
+            />
           )}
-          {currentView === AppView.GLOBAL_SEARCH && <GlobalSearch globalWorkers={globalWorkers} onInviteWorker={() => {}} />}
-          {currentView === AppView.BROADCASTS && (
-            <Broadcasts company={currentCompany} jobs={jobs} workers={[...workers, ...globalWorkers]} />
-          )}
-          {currentView === AppView.SETTINGS_COMPANY && currentCompany && (
-            <CompanySettings company={currentCompany} jobs={jobs} onUpdateCompany={handleUpdateCompany} />
-          )}
-
-          {/* ADMIN */}
           {currentView === AppView.ADMIN && (
             <AdminPanel
               companies={companies}
@@ -291,12 +321,19 @@ const App: React.FC = () => {
               setActiveTab={setAdminTab}
               isDemoMode={isDemoMode}
               onToggleDemo={setIsDemoMode}
+              onBack={() => setCurrentView(AppView.DASHBOARD)}
             />
           )}
-          {currentView === AppView.AI_REVIEW && <AIReview workers={workers} jobs={jobs} companies={companies} />}
-
-          {/* WORKER */}
-          {currentView === AppView.WORKER_PORTAL && <WorkerPortal onExit={handleLogout} />}
+          {currentView === AppView.GLOBAL_SEARCH && <GlobalSearch globalWorkers={globalWorkers} />}
+          {currentView === AppView.SETTINGS_COMPANY && (
+            <CompanySettings company={currentCompany} onUpdateCompany={handleUpdateCompany} />
+          )}
+          {currentView === AppView.BROADCASTS && <Broadcasts />}
+          {currentView === AppView.AI_REVIEW && <AIReview />}
+          {currentView === AppView.WORKER_PORTAL && (
+            <WorkerPortal currentCompany={currentCompany} jobs={jobs} workers={workers} />
+          )}
+          {currentView === AppView.WORKER_AUTH && <WorkerAuthScreen />}
         </div>
       </main>
     </div>
