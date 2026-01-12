@@ -9,11 +9,13 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   Timestamp,
 } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { db, auth } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+import { db, auth, functions } from "../firebase";
 import {
   AlertTriangle,
   Briefcase,
@@ -86,14 +88,25 @@ type CompanyRow = {
   city?: string | null;
 };
 
-type Lead = any;
+type LeadStatus = "pending" | "contacted" | "approved" | "rejected";
+
+type LeadDoc = {
+  id: string;
+  companyName: string;
+  rut: string;
+  email: string;
+  phone?: string;
+  region?: string;
+  status: LeadStatus;
+  createdAt?: any;
+  updatedAt?: any;
+  notes?: string;
+};
 type AdminConfig = any;
 
 type AdminPanelProps = {
   companies: any[];
   setCompanies: React.Dispatch<React.SetStateAction<any[]>>;
-  leads: Lead[];
-  setLeads: React.Dispatch<React.SetStateAction<Lead[]>>;
   adminConfig: AdminConfig;
   setAdminConfig: React.Dispatch<React.SetStateAction<AdminConfig>>;
   activeTab: "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
@@ -350,6 +363,18 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 
+function formatLeadDate(value: any): string {
+  if (!value) return "—";
+  const date =
+    value instanceof Timestamp
+      ? value.toDate()
+      : value?.toDate?.()
+        ? value.toDate()
+        : new Date(value);
+  if (!date || Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("es-CL");
+}
+
 // --------- Main component ---------
 export default function AdminPanel(props: AdminPanelProps) {
   const { activeTab, setActiveTab } = props;
@@ -359,6 +384,15 @@ export default function AdminPanel(props: AdminPanelProps) {
   // Companies list for Admin CRUD
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [loadingCompanies, setLoadingCompanies] = useState(true);
+
+  // Leads (solicitudes)
+  const [leads, setLeads] = useState<LeadDoc[]>([]);
+  const [leadsLoading, setLeadsLoading] = useState(true);
+  const [leadsError, setLeadsError] = useState<string | null>(null);
+  const [leadNotesDrafts, setLeadNotesDrafts] = useState<Record<string, string>>({});
+  const [leadActionLoading, setLeadActionLoading] = useState<string | null>(null);
+  const [leadEmailLoading, setLeadEmailLoading] = useState<string | null>(null);
+  const [leadNotice, setLeadNotice] = useState<string | null>(null);
 
   // Selected company + stats
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
@@ -481,6 +515,40 @@ export default function AdminPanel(props: AdminPanelProps) {
       (err) => {
         console.error("onSnapshot companies error:", err);
         setLoadingCompanies(false);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    setLeadsLoading(true);
+    setLeadsError(null);
+    const q = query(collection(db, "company_leads"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows: LeadDoc[] = snap.docs.map((d) => {
+          const data = d.data() as Omit<LeadDoc, "id">;
+          return {
+            id: d.id,
+            companyName: data.companyName || "(sin nombre)",
+            rut: data.rut || "",
+            email: data.email || "",
+            phone: data.phone || "",
+            region: data.region || "",
+            status: (data.status || "pending") as LeadStatus,
+            createdAt: data.createdAt,
+            updatedAt: data.updatedAt,
+            notes: data.notes || "",
+          };
+        });
+        setLeads(rows);
+        setLeadsLoading(false);
+      },
+      (err) => {
+        console.error("onSnapshot company_leads error:", err);
+        setLeadsError("No se pudieron cargar las solicitudes.");
+        setLeadsLoading(false);
       }
     );
     return () => unsub();
@@ -1748,45 +1816,212 @@ export default function AdminPanel(props: AdminPanelProps) {
     );
   }
 
+  const handleLeadStatus = async (leadId: string, status: LeadStatus) => {
+    setLeadNotice(null);
+    setLeadActionLoading(leadId);
+    try {
+      await updateDoc(doc(db, "company_leads", leadId), {
+        status,
+        updatedAt: serverTimestamp(),
+      });
+      setLeadNotice(`Lead actualizado a ${status}.`);
+    } catch (e) {
+      console.error("update lead status error:", e);
+      setLeadNotice("No se pudo actualizar el estado.");
+    } finally {
+      setLeadActionLoading(null);
+    }
+  };
+
+  const handleLeadNotesSave = async (leadId: string) => {
+    const notes = (leadNotesDrafts[leadId] ?? "").trim();
+    setLeadNotice(null);
+    setLeadActionLoading(leadId);
+    try {
+      await updateDoc(doc(db, "company_leads", leadId), {
+        notes,
+        updatedAt: serverTimestamp(),
+      });
+      setLeadNotice("Notas guardadas.");
+    } catch (e) {
+      console.error("update lead notes error:", e);
+      setLeadNotice("No se pudieron guardar las notas.");
+    } finally {
+      setLeadActionLoading(null);
+    }
+  };
+
+  const handleApproveLead = async (lead: LeadDoc) => {
+    setLeadNotice(null);
+    setLeadActionLoading(lead.id);
+    try {
+      const companyRef = doc(collection(db, "companies"));
+      const payload = stripUndefinedDeep({
+        name: lead.companyName,
+        rut: lead.rut || null,
+        contactEmail: lead.email || null,
+        adminEmail: lead.email || null,
+        phone: lead.phone || null,
+        region: lead.region || null,
+        subscriptionPlan: "Basic",
+        status: "active",
+        visibility: "private",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        createdBy: {
+          uid: me?.uid || null,
+          email: me?.email || null,
+        },
+      });
+      await setDoc(companyRef, payload, { merge: true });
+      await updateDoc(doc(db, "company_leads", lead.id), {
+        status: "approved",
+        updatedAt: serverTimestamp(),
+      });
+      setLeadNotice("Lead aprobado y empresa creada.");
+    } catch (e) {
+      console.error("approve lead error:", e);
+      setLeadNotice("No se pudo aprobar la solicitud.");
+    } finally {
+      setLeadActionLoading(null);
+    }
+  };
+
+  const handleSendLeadEmail = async (leadId: string, templateKey: "contact" | "approved" | "rejected") => {
+    setLeadNotice(null);
+    setLeadEmailLoading(`${leadId}:${templateKey}`);
+    try {
+      const fn = httpsCallable(functions, "sendLeadEmail");
+      await fn({ leadId, templateKey });
+      setLeadNotice("Correo encolado correctamente.");
+    } catch (e: any) {
+      console.error("send lead email error:", e);
+      setLeadNotice("No se pudo enviar el correo.");
+    } finally {
+      setLeadEmailLoading(null);
+    }
+  };
+
   function renderRequests() {
     return (
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
         <div className="text-lg font-semibold text-gray-900">Solicitudes / Leads</div>
         <div className="mt-2 text-sm text-gray-600">
-          En tu App.tsx, esto viene desde estado local <Badge>leads</Badge>. Si quieres, luego lo migramos a Firestore.
+          Listado en tiempo real desde <Badge>company_leads</Badge> en Firestore.
         </div>
 
         <div className="mt-4">
-          <Badge>Total: {props.leads?.length || 0}</Badge>
-          <div className="mt-3 max-h-[60vh] overflow-auto rounded-xl border border-gray-200">
-            <table className="w-full text-left">
-              <thead className="text-xs uppercase text-gray-500 bg-gray-50">
-                <tr>
-                  <th className="p-3">Empresa</th>
-                  <th className="p-3">Contacto</th>
-                  <th className="p-3">Estado</th>
-                  <th className="p-3">Fecha</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {(props.leads || []).map((l: any) => (
-                  <tr key={l.id || `${l.companyName}-${l.timestamp}`}>
-                    <td className="p-3 font-semibold text-gray-900">{l.companyName || "—"}</td>
-                    <td className="p-3 text-sm text-gray-600">{l.email || l.phone || "—"}</td>
-                    <td className="p-3 text-sm">{l.status || "PENDING"}</td>
-                    <td className="p-3 text-sm text-gray-600">{l.timestamp || "—"}</td>
-                  </tr>
-                ))}
-                {(props.leads || []).length === 0 && (
+          <Badge>Total: {leads.length}</Badge>
+          {leadNotice && <div className="mt-3 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 p-3 rounded-xl">{leadNotice}</div>}
+          {leadsError && <div className="mt-3 text-sm text-amber-900 bg-amber-50 border border-amber-200 p-3 rounded-xl">{leadsError}</div>}
+          {leadsLoading && <div className="mt-3 text-sm text-gray-500 bg-gray-50 border border-gray-100 p-3 rounded-xl">Cargando solicitudes...</div>}
+          {!leadsLoading && leads.length === 0 && (
+            <div className="mt-3 text-sm text-gray-600 bg-gray-50 border border-gray-100 p-3 rounded-xl">
+              Sin solicitudes registradas aún.
+            </div>
+          )}
+          {!leadsLoading && leads.length > 0 && (
+            <div className="mt-3 max-h-[60vh] overflow-auto rounded-xl border border-gray-200">
+              <table className="w-full text-left">
+                <thead className="text-xs uppercase text-gray-500 bg-gray-50">
                   <tr>
-                    <td className="p-6 text-sm text-gray-600" colSpan={4}>
-                      Sin solicitudes registradas en esta sesión.
-                    </td>
+                    <th className="p-3">Empresa</th>
+                    <th className="p-3">Contacto</th>
+                    <th className="p-3">Estado</th>
+                    <th className="p-3">Fecha</th>
+                    <th className="p-3">Acciones</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {leads.map((lead) => (
+                    <tr key={lead.id} className="align-top">
+                      <td className="p-3 font-semibold text-gray-900">
+                        {lead.companyName || "—"}
+                        <div className="text-xs text-gray-500 mt-1">RUT: {lead.rut || "—"}</div>
+                        {lead.region ? <div className="text-xs text-gray-500">Región: {lead.region}</div> : null}
+                      </td>
+                      <td className="p-3 text-sm text-gray-600">
+                        {lead.email || "—"}
+                        {lead.phone ? <div className="text-xs text-gray-500 mt-1">{lead.phone}</div> : null}
+                      </td>
+                      <td className="p-3 text-sm capitalize">{lead.status || "pending"}</td>
+                      <td className="p-3 text-xs text-gray-600">{formatLeadDate(lead.createdAt)}</td>
+                      <td className="p-3 text-sm">
+                        <div className="flex flex-col gap-2 min-w-[220px]">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() => handleLeadStatus(lead.id, "contacted")}
+                              disabled={leadActionLoading === lead.id}
+                              className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-60"
+                            >
+                              Contactar
+                            </button>
+                            <button
+                              onClick={() => handleApproveLead(lead)}
+                              disabled={leadActionLoading === lead.id}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 disabled:opacity-60"
+                            >
+                              Aprobar
+                            </button>
+                            <button
+                              onClick={() => handleLeadStatus(lead.id, "rejected")}
+                              disabled={leadActionLoading === lead.id}
+                              className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 disabled:opacity-60"
+                            >
+                              Rechazar
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() => handleSendLeadEmail(lead.id, "contact")}
+                              disabled={leadEmailLoading === `${lead.id}:contact`}
+                              className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 disabled:opacity-60"
+                            >
+                              Enviar contacto
+                            </button>
+                            <button
+                              onClick={() => handleSendLeadEmail(lead.id, "approved")}
+                              disabled={leadEmailLoading === `${lead.id}:approved`}
+                              className="px-3 py-1.5 rounded-lg bg-slate-700 text-white text-xs font-bold hover:bg-slate-600 disabled:opacity-60"
+                            >
+                              Enviar aprobación
+                            </button>
+                            <button
+                              onClick={() => handleSendLeadEmail(lead.id, "rejected")}
+                              disabled={leadEmailLoading === `${lead.id}:rejected`}
+                              className="px-3 py-1.5 rounded-lg bg-slate-600 text-white text-xs font-bold hover:bg-slate-500 disabled:opacity-60"
+                            >
+                              Enviar rechazo
+                            </button>
+                          </div>
+                          <div>
+                            <textarea
+                              value={leadNotesDrafts[lead.id] ?? lead.notes ?? ""}
+                              onChange={(e) =>
+                                setLeadNotesDrafts((prev) => ({
+                                  ...prev,
+                                  [lead.id]: e.target.value,
+                                }))
+                              }
+                              placeholder="Notas internas..."
+                              className="w-full text-xs border border-gray-200 rounded-lg p-2 min-h-[70px]"
+                            />
+                            <button
+                              onClick={() => handleLeadNotesSave(lead.id)}
+                              disabled={leadActionLoading === lead.id}
+                              className="mt-2 px-3 py-1.5 rounded-lg bg-gray-100 text-gray-700 text-xs font-bold hover:bg-gray-200 disabled:opacity-60"
+                            >
+                              Guardar notas
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     );

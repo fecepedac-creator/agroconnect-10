@@ -15,9 +15,40 @@ const FieldValue = admin.firestore.FieldValue;
 
 // ===== Email (Gmail SMTP) =====
 const GMAIL_APP_PASSWORD = defineSecret("GMAIL_APP_PASSWORD");
+const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 const GMAIL_USER = "agroconnect@gmail.com";
 const GMAIL_REPLY_TO = "fecepedac@gmail.com";
 const DEFAULT_FROM_NAME = "AgroConnect";
+const SUPERADMIN_EMAILS = [
+  "fecepedac@gmail.com",
+  "fecepedac@hospitaldetalca.cl",
+  "fecepedac@hotmail.com",
+  "administracion@agroconnecto.cl",
+];
+
+function isSuperAdminToken(token: any): boolean {
+  const email = String(token?.email || "").toLowerCase();
+  const role = String(token?.role || "").toLowerCase();
+  return (
+    token?.admin === true ||
+    token?.superadmin === true ||
+    role === "admin" ||
+    role === "superadmin" ||
+    SUPERADMIN_EMAILS.includes(email)
+  );
+}
+
+async function getReplyToEmail(): Promise<string> {
+  try {
+    const snap = await db.collection("admin").doc("config").get();
+    const config = snap.exists ? (snap.data() as any) : null;
+    const replyTo = String(config?.notificationEmail || "").trim();
+    return replyTo || GMAIL_REPLY_TO;
+  } catch (e) {
+    console.error("getReplyToEmail error:", e);
+    return GMAIL_REPLY_TO;
+  }
+}
 
 /**
  * =========================
@@ -335,6 +366,233 @@ export const onApplicationUpdated = onDocumentUpdated(
     }
   }
 );
+
+/**
+ * =========================
+ *  LEADS EMAIL (Callable -> Outbox)
+ * =========================
+ */
+function buildLeadEmailTemplate(
+  templateKey: "contact" | "approved" | "rejected",
+  lead: any,
+  replyTo: string
+) {
+  const companyName = String(lead?.companyName || "tu empresa");
+  const baseSignature = `\n\nSaludos,\nEquipo AgroConnect\nResponde a este correo o escribe a ${replyTo}`;
+
+  if (templateKey === "approved") {
+    return {
+      subject: `AgroConnect: incorporación aprobada para ${companyName}`,
+      text:
+        `Hola ${companyName},\n\nTu solicitud fue aprobada. En breve te contactaremos con los próximos pasos para completar el onboarding y activar tu perfil.` +
+        baseSignature,
+      html: `<p>Hola ${companyName},</p><p>Tu solicitud fue aprobada. En breve te contactaremos con los próximos pasos para completar el onboarding y activar tu perfil.</p><p>Saludos,<br/>Equipo AgroConnect<br/>Responde a este correo o escribe a ${replyTo}</p>`,
+    };
+  }
+
+  if (templateKey === "rejected") {
+    return {
+      subject: `AgroConnect: actualización sobre tu solicitud`,
+      text:
+        `Hola ${companyName},\n\nGracias por tu interés. Por ahora no podemos avanzar con la incorporación, pero podremos retomar en el futuro si cambian las condiciones.` +
+        baseSignature,
+      html: `<p>Hola ${companyName},</p><p>Gracias por tu interés. Por ahora no podemos avanzar con la incorporación, pero podremos retomar en el futuro si cambian las condiciones.</p><p>Saludos,<br/>Equipo AgroConnect<br/>Responde a este correo o escribe a ${replyTo}</p>`,
+    };
+  }
+
+  return {
+    subject: `AgroConnect: recibimos tu solicitud`,
+    text:
+      `Hola ${companyName},\n\nGracias por contactarnos. Revisaremos tu solicitud y te responderemos pronto con los próximos pasos.` +
+      baseSignature,
+    html: `<p>Hola ${companyName},</p><p>Gracias por contactarnos. Revisaremos tu solicitud y te responderemos pronto con los próximos pasos.</p><p>Saludos,<br/>Equipo AgroConnect<br/>Responde a este correo o escribe a ${replyTo}</p>`,
+  };
+}
+
+export const sendLeadEmail = onCall({ region: "us-central1" }, async (request) => {
+  const user = request.auth;
+  if (!user?.uid || !user?.token) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+
+  if (!isSuperAdminToken(user.token)) {
+    throw new HttpsError("permission-denied", "No tienes permisos para enviar correos.");
+  }
+
+  const leadId = String(request.data?.leadId || "").trim();
+  const templateKey = String(request.data?.templateKey || "").trim() as
+    | "contact"
+    | "approved"
+    | "rejected";
+
+  if (!leadId || !["contact", "approved", "rejected"].includes(templateKey)) {
+    throw new HttpsError("invalid-argument", "leadId y templateKey son obligatorios.");
+  }
+
+  const leadSnap = await db.collection("company_leads").doc(leadId).get();
+  if (!leadSnap.exists) {
+    throw new HttpsError("not-found", "Lead no encontrado.");
+  }
+
+  const lead = leadSnap.data() as any;
+  if (!lead?.email) {
+    throw new HttpsError("failed-precondition", "El lead no tiene email.");
+  }
+
+  const replyTo = await getReplyToEmail();
+  const template = buildLeadEmailTemplate(templateKey, lead, replyTo);
+
+  const outboxRef = db.collection("comms_outbox").doc();
+  await outboxRef.set({
+    to: lead.email,
+    subject: template.subject,
+    text: template.text,
+    html: template.html,
+    replyTo,
+    status: "queued",
+    createdAt: FieldValue.serverTimestamp(),
+    meta: {
+      leadId,
+      templateKey,
+      createdByUid: user.uid,
+      createdByEmail: user.token.email || null,
+    },
+  });
+
+  return { ok: true, outboxId: outboxRef.id };
+});
+
+/**
+ * =========================
+ *  AI OPERATIONAL AUDIT (Gemini)
+ * =========================
+ */
+async function safeCount(queryRef: any): Promise<number | null> {
+  try {
+    const snap = await queryRef.count().get();
+    return snap.data().count ?? 0;
+  } catch (e) {
+    console.error("safeCount error:", e);
+    return null;
+  }
+}
+
+export const runOperationalAudit = onCall(
+  {
+    region: "us-central1",
+    secrets: [GEMINI_API_KEY],
+  },
+  async (request) => {
+    const user = request.auth;
+    if (!user?.uid || !user?.token) {
+      throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+    }
+    if (!isSuperAdminToken(user.token)) {
+      throw new HttpsError("permission-denied", "No tienes permisos para ejecutar auditorías.");
+    }
+
+    const apiKey = GEMINI_API_KEY.value();
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "IA no configurada aún.");
+    }
+
+    const dataQualityNotes: string[] = [];
+    const totalCompaniesActive =
+      (await safeCount(db.collection("companies").where("status", "in", ["active", "Active"]))) ?? 0;
+
+    let totalJobsActive = await safeCount(db.collectionGroup("jobs").where("isActive", "==", true));
+    if (totalJobsActive === null || totalJobsActive === 0) {
+      const alt = await safeCount(db.collectionGroup("jobs").where("jobStatus", "==", "active"));
+      if (alt !== null) totalJobsActive = alt;
+      if (alt === null) dataQualityNotes.push("No se pudo contar ofertas activas (jobs).");
+    }
+
+    const last30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const totalApplicationsLast30d = await safeCount(
+      db.collectionGroup("applications").where("createdAt", ">=", last30d)
+    );
+    if (totalApplicationsLast30d === null) {
+      dataQualityNotes.push("No se pudo contar postulaciones en los últimos 30 días.");
+    }
+
+    const leadsPending = await safeCount(db.collection("company_leads").where("status", "==", "pending"));
+    if (leadsPending === null) {
+      dataQualityNotes.push("No se pudo contar leads pendientes.");
+    }
+
+    const overdueCompanies = await safeCount(
+      db.collection("companies").where("status", "in", ["overdue", "Overdue"])
+    );
+    if (overdueCompanies === null) {
+      dataQualityNotes.push("No hay señal clara de morosidad disponible.");
+    }
+
+    const metrics = {
+      totalCompaniesActive,
+      totalJobsActive: totalJobsActive ?? 0,
+      totalApplicationsLast30d: totalApplicationsLast30d ?? 0,
+      leadsPending: leadsPending ?? 0,
+      overdueCompanies: overdueCompanies ?? "N/A",
+    };
+
+    const prompt = `Eres un auditor operativo para AgroConnect. Analiza las métricas y devuelve SOLO JSON estricto con esta forma:
+{
+  \"healthScore\": 0-100,
+  \"summary\": \"string breve\",
+  \"risks\": [\"...\"],
+  \"recommendations\": [\"...\"],
+  \"dataQualityNotes\": [\"...\"]
+}
+
+Métricas:
+${JSON.stringify(metrics)}
+
+Notas de calidad de datos existentes:
+${JSON.stringify(dataQualityNotes)}
+
+Incluye las notas de calidad de datos, y agrega otras si detectas inconsistencias.`;
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: "application/json",
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new HttpsError("internal", `Gemini error: ${text.slice(0, 500)}`);
+    }
+
+    const data = (await response.json()) as any;
+    const contentText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!contentText) {
+      throw new HttpsError("internal", "Respuesta vacía desde Gemini.");
+    }
+
+    let analysis: any;
+    try {
+      analysis = JSON.parse(contentText);
+    } catch (e) {
+      console.error("Gemini parse error:", e);
+      throw new HttpsError("internal", "Respuesta de IA no es JSON válido.");
+    }
+
+    return {
+      ok: true,
+      metrics,
+      analysis,
+    };
+  }
+);
 /**
  * =========================
  *  COMMS OUTBOX -> EMAIL (Gmail SMTP)
@@ -396,6 +654,7 @@ export const sendEmailFromOutbox = onDocumentCreated(
     const subject = String(data?.subject ?? "").trim();
     const text = data?.text ? String(data.text) : undefined;
     const html = data?.html ? String(data.html) : undefined;
+    const replyTo = String(data?.replyTo || "").trim() || (await getReplyToEmail());
 
     if (!to || !subject || (!text && !html)) {
       await ref.update({
@@ -422,7 +681,7 @@ export const sendEmailFromOutbox = onDocumentCreated(
           name: DEFAULT_FROM_NAME,
           address: GMAIL_USER,
         },
-        replyTo: GMAIL_REPLY_TO,
+        replyTo,
         subject,
         text,
         html,

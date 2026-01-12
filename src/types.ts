@@ -94,9 +94,21 @@ export interface Company {
   id: string;
   name: string;
   subscriptionPlan: 'Basic' | 'Pro' | 'Enterprise';
-  status: 'Active' | 'Overdue';
+  status?:
+    | 'Active'
+    | 'Overdue'
+    | 'Pending'
+    | 'Suspended'
+    | 'active'
+    | 'inactive'
+    | 'pending'
+    | 'suspended';
+  visibility?: 'public' | 'private';
   contactEmail: string;
   logoUrl?: string;
+  rut?: string;
+  region?: string;
+  rubro?: string;
   // Nuevos campos de configuración
   hrName?: string;
   hrPhone?: string;
@@ -135,12 +147,14 @@ export enum WorkerTab {
 export interface Lead {
   id: string;
   companyName: string;
-  contactName: string;
-  phone: string;
   email: string;
-  message: string;
-  timestamp: string;
-  status: 'PENDING' | 'PROCESSED';
+  rut: string;
+  phone?: string;
+  region?: string;
+  status: 'pending' | 'contacted' | 'approved' | 'rejected';
+  createdAt?: any;
+  updatedAt?: any;
+  notes?: string;
 }
 
 export interface AdminConfig {

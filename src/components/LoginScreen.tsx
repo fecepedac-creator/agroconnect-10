@@ -10,7 +10,10 @@ type Props = {
   companiesError?: string | null;
   onRetryCompanies?: () => void;
   onSelectRole: (role: UserRole, companyData?: Company) => void;
-  onRegisterLead: (leadData: Omit<Lead, "id" | "timestamp" | "status">) => void;
+  onRegisterLead: (leadData: Omit<Lead, "id" | "status" | "createdAt" | "updatedAt">) => Promise<{
+    ok: boolean;
+    message?: string;
+  }>;
 };
 
 export default function LoginScreen({
@@ -28,13 +31,15 @@ export default function LoginScreen({
   const [openCompanies, setOpenCompanies] = useState(false);
   const [q, setQ] = useState("");
   const [openLead, setOpenLead] = useState(false);
+  const [leadFeedback, setLeadFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   // Lead form
   const [leadCompanyName, setLeadCompanyName] = useState("");
-  const [leadContactName, setLeadContactName] = useState("");
+  const [leadRut, setLeadRut] = useState("");
   const [leadEmail, setLeadEmail] = useState("");
   const [leadPhone, setLeadPhone] = useState("");
-  const [leadMessage, setLeadMessage] = useState("");
+  const [leadRegion, setLeadRegion] = useState("");
+  const [leadNotes, setLeadNotes] = useState("");
 
   // Hover/Focus visual
   const [hoverSide, setHoverSide] = useState<null | "worker" | "company">(null);
@@ -134,31 +139,51 @@ export default function LoginScreen({
     }
   };
 
-  const handleSendLead = () => {
+  const handleSendLead = async () => {
     setError(null);
+    setLeadFeedback(null);
 
     // Validación mínima
-    if (!leadCompanyName.trim() || !leadContactName.trim() || !leadEmail.trim()) {
-      setError("Completa al menos: Empresa, Nombre de contacto y Email.");
+    if (!leadCompanyName.trim() || !leadRut.trim() || !leadEmail.trim()) {
+      setError("Completa al menos: Empresa, RUT y Email.");
       return;
     }
 
-    onRegisterLead({
+    const emailOk = /^\S+@\S+\.\S+$/.test(leadEmail.trim());
+    if (!emailOk) {
+      setError("El email no tiene un formato válido.");
+      return;
+    }
+
+    const rutOk = /^[0-9kK.-]{7,15}$/.test(leadRut.trim());
+    if (!rutOk) {
+      setError("El RUT no tiene un formato válido.");
+      return;
+    }
+
+    const res = await onRegisterLead({
       companyName: leadCompanyName.trim(),
-      contactName: leadContactName.trim(),
+      rut: leadRut.trim(),
       email: leadEmail.trim(),
-      phone: leadPhone.trim(),
-      message: (leadMessage || "Solicito incorporación de mi empresa a AgroConnect.").trim(),
+      phone: leadPhone.trim() || undefined,
+      region: leadRegion.trim() || undefined,
+      notes: (leadNotes || "Solicito incorporación de mi empresa a AgroConnect.").trim(),
     });
 
     // Reset + feedback simple
+    if (!res.ok) {
+      setLeadFeedback({ type: "error", message: res.message || "No se pudo enviar la solicitud." });
+      return;
+    }
+
+    setLeadFeedback({ type: "success", message: "Solicitud enviada. Te contactaremos." });
     setOpenLead(false);
     setLeadCompanyName("");
-    setLeadContactName("");
+    setLeadRut("");
     setLeadEmail("");
     setLeadPhone("");
-    setLeadMessage("");
-    alert("Solicitud enviada. Te contactaremos.");
+    setLeadRegion("");
+    setLeadNotes("");
   };
 
   const handleAdminUnlock = async () => {
@@ -364,6 +389,19 @@ export default function LoginScreen({
                 </button>
               </div>
 
+              {leadFeedback && (
+                <div
+                  className={[
+                    "text-sm rounded-2xl p-4 border",
+                    leadFeedback.type === "success"
+                      ? "text-emerald-900 bg-emerald-50 border-emerald-200"
+                      : "text-amber-900 bg-amber-50 border-amber-200",
+                  ].join(" ")}
+                >
+                  {leadFeedback.message}
+                </div>
+              )}
+
               {companiesError && (
                 <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center justify-between gap-3">
                   <span>{companiesError}</span>
@@ -399,7 +437,8 @@ export default function LoginScreen({
                           <div>
                             <div className="text-lg font-extrabold text-gray-900">{c.name || "Empresa"}</div>
                             <div className="text-xs text-gray-500">
-                              {(c as any)?.region ? `Región: ${(c as any).region}` : ""}
+                              {(c as any)?.rubro ? `Rubro: ${(c as any).rubro}` : ""}
+                              {(c as any)?.region ? ` • Región: ${(c as any).region}` : ""}
                               {(c as any)?.rut ? ` • RUT: ${(c as any).rut}` : ""}
                             </div>
                           </div>
@@ -456,9 +495,9 @@ export default function LoginScreen({
                       className="w-full px-4 py-3 rounded-2xl border border-gray-200"
                     />
                     <input
-                      value={leadContactName}
-                      onChange={(e) => setLeadContactName(e.target.value)}
-                      placeholder="Nombre de contacto *"
+                      value={leadRut}
+                      onChange={(e) => setLeadRut(e.target.value)}
+                      placeholder="RUT *"
                       className="w-full px-4 py-3 rounded-2xl border border-gray-200"
                     />
                     <input
@@ -473,10 +512,16 @@ export default function LoginScreen({
                       placeholder="Teléfono (opcional)"
                       className="w-full px-4 py-3 rounded-2xl border border-gray-200"
                     />
+                    <input
+                      value={leadRegion}
+                      onChange={(e) => setLeadRegion(e.target.value)}
+                      placeholder="Región (opcional)"
+                      className="w-full px-4 py-3 rounded-2xl border border-gray-200"
+                    />
                     <textarea
-                      value={leadMessage}
-                      onChange={(e) => setLeadMessage(e.target.value)}
-                      placeholder="Mensaje (opcional)"
+                      value={leadNotes}
+                      onChange={(e) => setLeadNotes(e.target.value)}
+                      placeholder="Notas (opcional)"
                       className="w-full px-4 py-3 rounded-2xl border border-gray-200 min-h-[110px]"
                     />
 
