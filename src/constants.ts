@@ -59,12 +59,13 @@ export const ENHANCED_DEMO_GLOBAL: Worker[] = [
   { id: 'dg10', name: 'Pablo Neruda', rut: '14.333.444-2', phone: '+56992003353', region: 'Valparaíso', status: WorkerStatus.CONSENTED, skills: ['Packing'], coordinates: { lat: -33.047, lng: -71.612 } },
 ];
 
-export const INITIAL_COMPANIES: Company[] = [
+export const DEMO_COMPANIES: Company[] = [
   { 
     id: 'c1', 
     name: 'Agrícola Los Andes', 
     subscriptionPlan: 'Pro', 
-    status: 'Active', 
+    status: 'active', 
+    visibility: 'public',
     contactEmail: 'contacto@losandes.cl',
     logoUrl: 'https://images.unsplash.com/photo-1595856552254-2070f807eb47?q=80&w=200&auto=format&fit=crop'
   },
@@ -72,7 +73,8 @@ export const INITIAL_COMPANIES: Company[] = [
     id: 'c2', 
     name: 'Frutos del Valle S.A.', 
     subscriptionPlan: 'Enterprise', 
-    status: 'Active', 
+    status: 'active',
+    visibility: 'public',
     contactEmail: 'rrhh@frutosvalle.cl',
     logoUrl: 'https://images.unsplash.com/photo-1610832958506-aa56368176cf?q=80&w=200&auto=format&fit=crop'
   },
@@ -80,7 +82,8 @@ export const INITIAL_COMPANIES: Company[] = [
     id: 'c3', 
     name: 'Exportadora Sol Naciente', 
     subscriptionPlan: 'Basic', 
-    status: 'Overdue', 
+    status: 'active',
+    visibility: 'public',
     contactEmail: 'finanzas@solnaciente.cl' 
   },
 ];

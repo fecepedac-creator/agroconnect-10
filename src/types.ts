@@ -161,4 +161,5 @@ export interface AdminConfig {
   whatsappNumber: string;
   notificationEmail: string;
   supportTeam: string;
+  demoMode?: boolean;
 }
