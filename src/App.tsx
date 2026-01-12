@@ -1,5 +1,17 @@
 import React, { useEffect, useState } from "react";
-import { collection, doc, getDoc, getDocs, limit, query, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from "firebase/firestore";
 import { db } from "./firebase";
 
 import {
@@ -68,7 +80,6 @@ const App: React.FC = () => {
     (ENHANCED_DEMO_GLOBAL as any) || ENHANCED_DEMO_WORKERS || MOCK_GLOBAL_WORKERS
   );
 
-  const [leads, setLeads] = useState<Lead[]>([]);
   const [adminConfig, setAdminConfig] = useState<AdminConfig>({
     whatsappNumber: "+56900000000",
     notificationEmail: "soporte@agroconnect.cl",
@@ -109,19 +120,23 @@ const App: React.FC = () => {
     setCurrentCompany(updated);
   };
 
-  const handleRegisterLead = (leadData: Omit<Lead, "id" | "timestamp" | "status">) => {
-    const newLead: Lead = {
-      ...leadData,
-      id: `lead-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      status: "PENDING",
-    };
-    setLeads((prev) => [newLead, ...prev]);
-
+  const handleRegisterLead = async (leadData: Omit<Lead, "id" | "status" | "createdAt" | "updatedAt">) => {
     try {
+      const payload = {
+        ...leadData,
+        status: "pending",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      const ref = await addDoc(collection(db, "company_leads"), payload);
       // eslint-disable-next-line no-console
-      console.log(`🚨 [SISTEMA] Nuevo Lead: ${newLead.companyName} (${newLead.contactName})`);
-    } catch {}
+      console.log(`🚨 [SISTEMA] Nuevo Lead: ${leadData.companyName} (${ref.id})`);
+      return { ok: true };
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error("register lead error:", e);
+      return { ok: false, message: "No se pudo registrar la solicitud. Intenta nuevamente." };
+    }
   };
 
   const handleLogout = () => {
@@ -136,10 +151,38 @@ const App: React.FC = () => {
     setCompaniesLoading(true);
     setCompaniesError(null);
     try {
-      const q = query(collection(db, "companies"), limit(200));
-      const snap = await getDocs(q);
-      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
-      setCompanies(list);
+      const baseRef = collection(db, "companies");
+      const orderedQuery = query(
+        baseRef,
+        where("status", "==", "active"),
+        where("visibility", "==", "public"),
+        orderBy("name", "asc"),
+        limit(200)
+      );
+
+      try {
+        const snap = await getDocs(orderedQuery);
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
+        setCompanies(list);
+        return;
+      } catch (e: any) {
+        const msg = String(e?.message || "");
+        const code = String(e?.code || "");
+        if (code !== "failed-precondition" && !msg.toLowerCase().includes("index")) {
+          throw e;
+        }
+        // fallback sin orderBy si falta índice
+        const fallbackQuery = query(
+          baseRef,
+          where("status", "==", "active"),
+          where("visibility", "==", "public"),
+          limit(200)
+        );
+        const snap = await getDocs(fallbackQuery);
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
+        list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), "es"));
+        setCompanies(list);
+      }
     } catch (e: any) {
       setCompanies([]);
       setCompaniesError("No se pudieron cargar las empresas. Intenta nuevamente.");
@@ -315,14 +358,12 @@ const App: React.FC = () => {
             />
           )}
           {currentView === AppView.ADMIN && (
-            <AdminPanel
-              companies={companies}
-              setCompanies={setCompanies}
-              leads={leads}
-              setLeads={setLeads}
-              adminConfig={adminConfig}
-              setAdminConfig={setAdminConfig}
-              activeTab={adminTab}
+              <AdminPanel
+                companies={companies}
+                setCompanies={setCompanies}
+                adminConfig={adminConfig}
+                setAdminConfig={setAdminConfig}
+                activeTab={adminTab}
               setActiveTab={setAdminTab}
               isDemoMode={isDemoMode}
               onToggleDemo={setIsDemoMode}

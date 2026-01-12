@@ -128,6 +128,23 @@ service cloud.firestore {
     }
 
     /* ======================
+       LEADS (public)
+       ====================== */
+
+    match /company_leads/{leadId} {
+      allow create: if request.resource.data.companyName is string
+                    && request.resource.data.rut is string
+                    && request.resource.data.email is string
+                    && request.resource.data.status == "pending";
+      allow read, update: if isSuperAdmin();
+      allow delete: if false;
+    }
+
+    match /audits/{auditId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    /* ======================
        WORKERS
        ====================== */
 
@@ -142,7 +159,9 @@ service cloud.firestore {
 
     match /companies/{companyId} {
 
-      allow read: if isSuperAdmin() || isMyCompany(companyId);
+      allow read: if isSuperAdmin()
+                  || isMyCompany(companyId)
+                  || (resource.data.visibility == "public" && resource.data.status == "active");
       allow create: if isSuperAdmin();
 
       allow update: if isSuperAdmin()
