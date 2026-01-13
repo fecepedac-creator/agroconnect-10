@@ -87,6 +87,14 @@ service cloud.firestore {
     }
 
     /* ======================
+       Helpers PUBLIC
+       ====================== */
+
+    function isPublicDoc() {
+      return (resource.data.isPublic == true) || (resource.data.public == true);
+    }
+
+    /* ======================
        Seguridad updates empresa
        ====================== */
 
@@ -190,7 +198,7 @@ service cloud.firestore {
 
       allow read: if isSuperAdmin()
                   || isMyCompany(companyId)
-                  || (resource.data.visibility == "public" && resource.data.status == "active");
+                  || isPublicDoc();
       allow create: if isSuperAdmin();
 
       allow update: if isSuperAdmin()
