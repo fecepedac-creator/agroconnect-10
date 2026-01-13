@@ -1,8 +1,15 @@
 // src/components/WorkerAuthScreen.tsx
 import React, { useState } from "react";
-import { loginWorker, registerWorker } from "../services/authWorker";
-import { formatRut, validateRut } from "../services/rut";
+import {
+  loginWorker,
+  registerWorker,
+  sendWorkerPasswordReset,
+  signInWorkerWithGoogle,
+  updateWorkerRut,
+} from "../services/workerAuth";
+import { formatRut, isValidRut } from "../utils/rut";
 import { FiInfo, FiEye, FiEyeOff } from "react-icons/fi";
+import { auth } from "../firebase";
 
 type Props = {
   onSuccess: () => void;
@@ -13,6 +20,9 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [showResetCta, setShowResetCta] = useState(false);
+  const [needsRut, setNeedsRut] = useState(false);
 
   // Login
   const [identifier, setIdentifier] = useState("");
@@ -27,6 +37,7 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
   const [pass2, setPass2] = useState("");
   const [terms, setTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [rutGoogle, setRutGoogle] = useState("");
 
   const handleIdentifierChange = (value: string) => {
     const raw = value.trim();
@@ -39,12 +50,13 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
 
   const handleLogin = async () => {
     setErr(null);
+    setSuccessMsg(null);
     setLoading(true);
     try {
       if (!identifier.trim()) {
         throw new Error("Ingresa tu RUT o Email.");
       }
-      if (!identifier.includes("@") && !validateRut(identifier)) {
+      if (!identifier.includes("@") && !isValidRut(identifier)) {
         throw new Error("El RUT ingresado no es válido.");
       }
       await loginWorker(identifier, password);
@@ -58,12 +70,14 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
 
   const handleRegister = async () => {
     setErr(null);
+    setSuccessMsg(null);
+    setShowResetCta(false);
 
-    if (!fullName.trim() || !rutNew.trim() || !phone.trim() || !email.trim() || !pass1) {
-      setErr("Completa todos los campos requeridos.");
+    if (!fullName.trim() || !rutNew.trim() || !email.trim() || !pass1) {
+      setErr("Completa todos los campos requeridos (nombre, RUT, email y contraseña).");
       return;
     }
-    if (!validateRut(rutNew)) {
+    if (!isValidRut(rutNew)) {
       setErr("El RUT ingresado no es válido.");
       return;
     }
@@ -83,6 +97,10 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
       setErr("Debes aceptar los términos y condiciones.");
       return;
     }
+    if (phone.trim() && phone.trim().length !== 8) {
+      setErr("El teléfono debe tener 8 dígitos.");
+      return;
+    }
 
     setLoading(true);
     try {
@@ -91,7 +109,9 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
     } catch (e: any) {
       const code = String(e?.code || "");
       if (code.includes("auth/email-already-in-use")) {
-        setErr("Este email ya está en uso.");
+        setErr("Este correo ya está registrado. Inicia sesión o recupera tu clave.");
+        setShowResetCta(true);
+        setIdentifier(email.trim().toLowerCase());
       } else if (code.includes("auth/weak-password")) {
         setErr("La contraseña es muy débil.");
       } else if (code.includes("permission-denied")) {
@@ -99,6 +119,73 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
       } else {
         setErr(e?.message || "No se pudo crear la cuenta.");
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    setErr(null);
+    setSuccessMsg(null);
+
+    if (!identifier.trim()) {
+      setErr("Ingresa tu email o RUT para recuperar tu clave.");
+      return;
+    }
+
+    try {
+      const emailUsed = await sendWorkerPasswordReset(identifier);
+      setSuccessMsg(`Te enviamos un correo de recuperación a ${emailUsed}.`);
+    } catch (e: any) {
+      setErr(e?.message || "No se pudo enviar el correo de recuperación.");
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setErr(null);
+    setSuccessMsg(null);
+    setLoading(true);
+    try {
+      const { needsRut: needsRutFlag } = await signInWorkerWithGoogle();
+      if (needsRutFlag) {
+        setNeedsRut(true);
+        return;
+      }
+      onSuccess();
+    } catch (e: any) {
+      setErr(e?.message || "No se pudo iniciar sesión con Google.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveRutGoogle = async () => {
+    setErr(null);
+    setSuccessMsg(null);
+
+    if (!rutGoogle.trim()) {
+      setErr("Ingresa tu RUT para completar el perfil.");
+      return;
+    }
+    if (!isValidRut(rutGoogle)) {
+      setErr("El RUT ingresado no es válido.");
+      return;
+    }
+
+    const currentUser = auth.currentUser;
+    if (!currentUser?.uid || !currentUser.email) {
+      setErr("No encontramos tu sesión. Intenta ingresar nuevamente.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await updateWorkerRut(currentUser.uid, rutGoogle, currentUser.email);
+      setNeedsRut(false);
+      setSuccessMsg("RUT guardado correctamente.");
+      onSuccess();
+    } catch (e: any) {
+      setErr(e?.message || "No se pudo guardar el RUT.");
     } finally {
       setLoading(false);
     }
@@ -170,11 +257,28 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
                 </div>
 
                 <button
+                  type="button"
+                  onClick={handlePasswordReset}
+                  className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 text-left"
+                >
+                  ¿Olvidaste tu clave?
+                </button>
+
+                <button
                   onClick={handleLogin}
                   disabled={loading}
                   className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-extrabold py-3 rounded-xl transition-all shadow-md hover:shadow-lg"
                 >
                   {loading ? "Ingresando..." : "INICIAR SESIÓN"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={loading}
+                  className="w-full border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-bold py-3 rounded-xl transition-all shadow-sm"
+                >
+                  Continuar con Google
                 </button>
               </div>
             </>
@@ -210,7 +314,7 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
                   <input
                     value={phone}
                     onChange={(e) => setPhone(e.target.value.replace(/[^0-9]/g, ''))}
-                    placeholder="8 dígitos"
+                    placeholder="8 dígitos (opcional)"
                     maxLength={8}
                     className="flex-1 border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
                   />
@@ -269,9 +373,58 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
             </>
           )}
 
+          {needsRut && (
+            <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="text-sm font-extrabold text-amber-800">Completa tu RUT</div>
+              <p className="text-xs text-amber-700 mt-1">
+                Para finalizar el acceso con Google necesitamos tu RUT.
+              </p>
+              <div className="mt-3 flex flex-col gap-2">
+                <input
+                  value={rutGoogle}
+                  onChange={(e) => setRutGoogle(formatRut(e.target.value))}
+                  placeholder="RUT (Ej: 12.345.678-9)"
+                  className="w-full border border-amber-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-300 transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveRutGoogle}
+                  disabled={loading}
+                  className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-extrabold py-2 rounded-xl transition-all"
+                >
+                  Guardar RUT
+                </button>
+              </div>
+            </div>
+          )}
+
           {err && (
             <div className="mt-4 text-sm text-red-700 bg-red-100 border border-red-300 p-3 rounded-lg">
               {err}
+              {showResetCta && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMode("login")}
+                    className="text-xs font-bold text-emerald-700 hover:text-emerald-900"
+                  >
+                    Ir a Ingreso
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePasswordReset}
+                    className="text-xs font-bold text-emerald-700 hover:text-emerald-900"
+                  >
+                    Recuperar clave
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {successMsg && (
+            <div className="mt-4 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 p-3 rounded-lg">
+              {successMsg}
             </div>
           )}
 

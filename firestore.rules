@@ -103,11 +103,12 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if signedIn() && uid == myUid();
-      allow create, update: if signedIn()
+      allow create: if signedIn()
         && uid == myUid()
         && request.resource.data.role == "worker"
         && request.resource.data.email is string
         && request.resource.data.email.size() > 0;
+      allow update: if signedIn() && uid == myUid();
       allow delete: if isSuperAdmin();
     }
 
@@ -154,9 +155,28 @@ service cloud.firestore {
        ====================== */
 
     match /workers/{uid} {
-      allow read, create, update: if signedIn()
+      allow read: if signedIn() && uid == myUid();
+      allow create: if signedIn()
         && uid == myUid()
         && request.resource.data.role == "worker"
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 0;
+      allow update: if signedIn() && uid == myUid();
+      allow delete: if false;
+
+      match /applications/{appId} {
+        allow read, write: if signedIn() && uid == myUid();
+      }
+
+      match /documents/{docId} {
+        allow read, write: if signedIn() && uid == myUid();
+      }
+    }
+
+    match /worker_usernames/{rut} {
+      allow read: if true;
+      allow create, update: if signedIn()
+        && request.resource.data.uid == myUid()
         && request.resource.data.email is string
         && request.resource.data.email.size() > 0;
       allow delete: if false;

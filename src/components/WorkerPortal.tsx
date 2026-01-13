@@ -25,7 +25,7 @@ import {
   User as UserIcon,
 } from "lucide-react";
 import { auth, db } from "../firebase";
-import { logoutWorker } from "../services/authWorker";
+import { logoutWorker } from "../services/workerAuth";
 import WorkerAuthScreen from "./WorkerAuthScreen";
 import type { JobOffer } from "../types";
 

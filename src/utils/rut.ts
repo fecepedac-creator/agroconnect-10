@@ -1,7 +1,7 @@
-// src/services/rut.ts
+// src/utils/rut.ts
 
 // Valida un RUT chileno
-export const validateRut = (rut: string): boolean => {
+export const isValidRut = (rut: string): boolean => {
   if (!/^[0-9]{1,2}.[0-9]{3}.[0-9]{3}-[0-9kK]{1}$/.test(rut)) {
     return false;
   }
@@ -52,10 +52,4 @@ export const formatRut = (rut: string): string => {
 // Elimina puntos y guión para almacenamiento
 export const normalizeRut = (rut: string): string => {
   return rut.replace(/[^0-9kK]/g, "").toLowerCase();
-};
-
-// Convierte un RUT a un email interno para Firebase Auth
-export const rutToInternalEmail = (rut: string): string => {
-  const normalized = normalizeRut(rut);
-  return `${normalized}@agroconnect.cl`;
 };
