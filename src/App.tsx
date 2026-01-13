@@ -4,13 +4,8 @@ import {
   collection,
   doc,
   getDoc,
-  getDocs,
-  limit,
-  orderBy,
-  query,
   serverTimestamp,
   setDoc,
-  where,
 } from "firebase/firestore";
 import { db } from "./firebase";
 
@@ -53,7 +48,9 @@ import {
   MOCK_GLOBAL_WORKERS,
   ENHANCED_DEMO_WORKERS,
   ENHANCED_DEMO_GLOBAL,
+  DEMO_COMPANIES,
 } from "./constants";
+import { getCompanies } from "./services/companies";
 
 type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
 
@@ -64,9 +61,6 @@ const App: React.FC = () => {
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-
-  // Demo Mode State (usado por AdminPanel)
-  const [isDemoMode, setIsDemoMode] = useState(false);
 
   // Data State
   const [workers, setWorkers] = useState<Worker[]>(INITIAL_WORKERS);
@@ -82,6 +76,7 @@ const App: React.FC = () => {
     whatsappNumber: "+56900000000",
     notificationEmail: "soporte@agroconnect.cl",
     supportTeam: "AgroConnect",
+    demoMode: false,
   });
 
   const [adminTab, setAdminTab] = useState<AdminTab>("OVERVIEW");
@@ -146,36 +141,13 @@ const App: React.FC = () => {
     setCompaniesLoading(true);
     setCompaniesError(null);
     try {
-      const baseRef = collection(db, "companies");
-      const orderedQuery = query(
-        baseRef,
-        where("status", "==", "active"),
-        where("visibility", "==", "public"),
-        orderBy("name", "asc")
-      );
-
-      try {
-        const snap = await getDocs(orderedQuery);
-        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
-        setCompanies(list);
-        // eslint-disable-next-line no-console
-        console.info(`[Empresas] Cargadas ${list.length} compañías públicas activas.`);
-        return;
-      } catch (e: any) {
-        const msg = String(e?.message || "");
-        const code = String(e?.code || "");
-        if (code !== "failed-precondition" && !msg.toLowerCase().includes("index")) {
-          throw e;
-        }
-        // fallback sin orderBy si falta índice
-        const fallbackQuery = query(baseRef, where("status", "==", "active"), where("visibility", "==", "public"));
-        const snap = await getDocs(fallbackQuery);
-        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
-        list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), "es"));
-        setCompanies(list);
-        // eslint-disable-next-line no-console
-        console.info(`[Empresas] Cargadas ${list.length} compañías (fallback sin índice).`);
-      }
+      const list = await getCompanies({
+        demoMode: Boolean(adminConfig.demoMode),
+        demoCompanies: DEMO_COMPANIES,
+      });
+      setCompanies(list);
+      // eslint-disable-next-line no-console
+      console.info(`[Empresas] Cargadas ${list.length} compañías ${adminConfig.demoMode ? "(modo demo)" : "reales"}.`);
     } catch (e: any) {
       setCompanies([]);
       setCompaniesError("No se pudieron cargar las empresas. Intenta nuevamente.");
@@ -188,13 +160,18 @@ const App: React.FC = () => {
 
   useEffect(() => {
     void loadCompanies();
-  }, []);
+  }, [adminConfig.demoMode]);
 
   useEffect(() => {
     const loadAdminConfig = async () => {
       try {
         const snap = await getDoc(doc(db, "admin", "config"));
-        if (snap.exists()) setAdminConfig(snap.data() as any);
+        if (snap.exists()) {
+          setAdminConfig((prev) => ({
+            ...prev,
+            ...(snap.data() as AdminConfig),
+          }));
+        }
       } catch {
         // silent
       }
@@ -205,6 +182,11 @@ const App: React.FC = () => {
   const handleAdminConfigSave = async (config: AdminConfig) => {
     setAdminConfig(config);
     await setDoc(doc(db, "admin", "config"), { ...config, updatedAt: serverTimestamp() }, { merge: true });
+  };
+
+  const handleToggleDemoMode = async (nextValue: boolean) => {
+    const updated = { ...adminConfig, demoMode: nextValue };
+    await handleAdminConfigSave(updated);
   };
 
   const NavItem = ({ view, icon: Icon, label }: { view: AppView; icon: any; label: string }) => {
@@ -357,11 +339,11 @@ const App: React.FC = () => {
                 adminConfig={adminConfig}
                 setAdminConfig={setAdminConfig}
                 activeTab={adminTab}
-              setActiveTab={setAdminTab}
-              isDemoMode={isDemoMode}
-              onToggleDemo={setIsDemoMode}
-              onBack={() => setCurrentView(AppView.DASHBOARD)}
-            />
+                setActiveTab={setAdminTab}
+                isDemoMode={Boolean(adminConfig.demoMode)}
+                onToggleDemo={handleToggleDemoMode}
+                onBack={() => setCurrentView(AppView.DASHBOARD)}
+              />
           )}
           {currentView === AppView.GLOBAL_SEARCH && <GlobalSearch globalWorkers={globalWorkers} />}
           {currentView === AppView.SETTINGS_COMPANY && (
