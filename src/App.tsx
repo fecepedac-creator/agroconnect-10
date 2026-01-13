@@ -15,12 +15,9 @@ import {
   Briefcase,
   Settings,
   Menu,
-  X,
   Megaphone,
   Sprout,
   Wifi,
-  Inbox,
-  Sliders,
   Globe,
   Bot,
   LogOut,
@@ -28,7 +25,6 @@ import {
 } from "lucide-react";
 
 import Dashboard from "./components/Dashboard";
-import CompanyDashboard from "./components/CompanyDashboard";
 import PublishOffer from "./components/PublishOffer";
 
 import Workers from "./components/Workers";
@@ -40,8 +36,9 @@ import LoginScreen from "./components/LoginScreen";
 import GlobalSearch from "./components/GlobalSearch";
 import CompanySettings from "./components/CompanySettings";
 import Broadcasts from "./components/Broadcasts";
+import WorkerAuthScreen from "./components/WorkerAuthScreen";
 
-import { Worker, JobOffer, AppView, UserRole, Company, Lead, AdminConfig } from "./types";
+import { Worker, JobOffer, AppView, UserRole, Company, Lead, AdminConfig, WorkerStatus } from "./types";
 import {
   INITIAL_WORKERS,
   INITIAL_JOBS,
@@ -109,6 +106,19 @@ const App: React.FC = () => {
   const handleUpdateCompany = (updated: Company) => {
     setCompanies((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     setCurrentCompany(updated);
+  };
+
+  const handleInviteWorker = (worker: Worker) => {
+    setWorkers((prev) => {
+      if (prev.some((item) => item.id === worker.id)) return prev;
+      return [
+        ...prev,
+        {
+          ...worker,
+          status: worker.status ?? WorkerStatus.PENDING,
+        },
+      ];
+    });
   };
 
   const handleRegisterLead = async (leadData: Omit<Lead, "id" | "status" | "createdAt" | "updatedAt">) => {
@@ -316,45 +326,58 @@ const App: React.FC = () => {
         <div className="p-6">
           {currentView === AppView.DASHBOARD && (
             <Dashboard
-              currentCompany={currentCompany}
               jobs={jobs}
               workers={workers}
+              globalWorkers={globalWorkers}
               onRadarClick={handleRadarClick}
             />
           )}
           {currentView === AppView.WORKERS && <Workers workers={workers} setWorkers={setWorkers} />}
-          {currentView === AppView.JOBS && <Jobs jobs={jobs} setJobs={setJobs} />}
+          {currentView === AppView.JOBS &&
+            (currentCompany ? (
+              <Jobs jobs={jobs} setJobs={setJobs} currentCompany={currentCompany} />
+            ) : (
+              <div className="text-sm text-gray-500">Selecciona una empresa para ver las ofertas.</div>
+            ))}
           {currentView === AppView.PUBLISH_OFFER && (
-            <PublishOffer
-              currentCompany={currentCompany}
-              jobs={jobs}
-              setJobs={setJobs}
-              workers={workers}
-            />
+            <>
+              {currentCompany ? (
+                <PublishOffer company={currentCompany} onNavigate={setCurrentView} />
+              ) : (
+                <div className="text-sm text-gray-500">Selecciona una empresa para publicar ofertas.</div>
+              )}
+            </>
           )}
           {currentView === AppView.ADMIN && (
-              <AdminPanel
-                companies={companies}
-                setCompanies={setCompanies}
-                adminConfig={adminConfig}
-                setAdminConfig={setAdminConfig}
-                activeTab={adminTab}
-                setActiveTab={setAdminTab}
-                isDemoMode={Boolean(adminConfig.demoMode)}
-                onToggleDemo={handleToggleDemoMode}
-                onBack={() => setCurrentView(AppView.DASHBOARD)}
-              />
+            <AdminPanel
+              companies={companies}
+              setCompanies={setCompanies}
+              adminConfig={adminConfig}
+              setAdminConfig={setAdminConfig}
+              activeTab={adminTab}
+              setActiveTab={setAdminTab}
+              isDemoMode={Boolean(adminConfig.demoMode)}
+              onToggleDemo={handleToggleDemoMode}
+              onBack={() => setCurrentView(AppView.DASHBOARD)}
+            />
           )}
-          {currentView === AppView.GLOBAL_SEARCH && <GlobalSearch globalWorkers={globalWorkers} />}
-          {currentView === AppView.SETTINGS_COMPANY && (
-            <CompanySettings company={currentCompany} onUpdateCompany={handleUpdateCompany} />
+          {currentView === AppView.GLOBAL_SEARCH && (
+            <GlobalSearch globalWorkers={globalWorkers} onInviteWorker={handleInviteWorker} />
           )}
-          {currentView === AppView.BROADCASTS && <Broadcasts />}
+          {currentView === AppView.SETTINGS_COMPANY &&
+            (currentCompany ? (
+              <CompanySettings company={currentCompany} jobs={jobs} onUpdateCompany={handleUpdateCompany} />
+            ) : (
+              <div className="text-sm text-gray-500">Selecciona una empresa para ver los ajustes.</div>
+            ))}
+          {currentView === AppView.BROADCASTS && (
+            <Broadcasts company={currentCompany} jobs={jobs} workers={workers} />
+          )}
           {currentView === AppView.AI_REVIEW && <AIReview />}
-          {currentView === AppView.WORKER_PORTAL && (
-            <WorkerPortal currentCompany={currentCompany} jobs={jobs} workers={workers} />
+          {currentView === AppView.WORKER_PORTAL && <WorkerPortal />}
+          {currentView === AppView.WORKER_AUTH && (
+            <WorkerAuthScreen onSuccess={() => setCurrentView(AppView.WORKER_PORTAL)} onBack={handleLogout} />
           )}
-          {currentView === AppView.WORKER_AUTH && <WorkerAuthScreen />}
         </div>
       </main>
     </div>

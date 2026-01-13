@@ -16,16 +16,23 @@ export async function getCompanies({ demoMode, demoCompanies = [] }: GetCompanie
   }
 
   const baseRef = collection(db, "companies");
-  const orderedQuery = query(
-    baseRef,
-    where("status", "==", "active"),
-    where("visibility", "==", "public"),
-    orderBy("name", "asc")
-  );
+  const publicQuery = query(baseRef, where("isPublic", "==", true), orderBy("name", "asc"));
+  const legacyPublicQuery = query(baseRef, where("public", "==", true), orderBy("name", "asc"));
 
   try {
-    const snap = await getDocs(orderedQuery);
-    return snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
+    const [publicSnap, legacySnap] = await Promise.all([getDocs(publicQuery), getDocs(legacyPublicQuery)]);
+    const combined = new Map<string, Company>();
+    publicSnap.docs.forEach((docSnap) => {
+      combined.set(docSnap.id, { id: docSnap.id, ...(docSnap.data() as any) } as Company);
+    });
+    legacySnap.docs.forEach((docSnap) => {
+      if (!combined.has(docSnap.id)) {
+        combined.set(docSnap.id, { id: docSnap.id, ...(docSnap.data() as any) } as Company);
+      }
+    });
+    const list = Array.from(combined.values());
+    list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), locale));
+    return list;
   } catch (e: any) {
     const msg = String(e?.message || "");
     const code = String(e?.code || "");
@@ -33,9 +40,20 @@ export async function getCompanies({ demoMode, demoCompanies = [] }: GetCompanie
       throw e;
     }
 
-    const fallbackQuery = query(baseRef, where("status", "==", "active"), where("visibility", "==", "public"));
-    const snap = await getDocs(fallbackQuery);
-    const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Company[];
+    const [publicSnap, legacySnap] = await Promise.all([
+      getDocs(query(baseRef, where("isPublic", "==", true))),
+      getDocs(query(baseRef, where("public", "==", true))),
+    ]);
+    const combined = new Map<string, Company>();
+    publicSnap.docs.forEach((docSnap) => {
+      combined.set(docSnap.id, { id: docSnap.id, ...(docSnap.data() as any) } as Company);
+    });
+    legacySnap.docs.forEach((docSnap) => {
+      if (!combined.has(docSnap.id)) {
+        combined.set(docSnap.id, { id: docSnap.id, ...(docSnap.data() as any) } as Company);
+      }
+    });
+    const list = Array.from(combined.values());
     list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), locale));
     return list;
   }
