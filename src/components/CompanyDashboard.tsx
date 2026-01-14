@@ -64,11 +64,11 @@ type BillingRecordDoc = {
   type: "invoice" | "payment";
   amount: number;
   currency: "CLP" | "USD";
-  issueDate?: string; // YYYY-MM-DD
-  dueDate?: string; // YYYY-MM-DD
-  paidDate?: string; // YYYY-MM-DD
+  issuedAt?: string; // YYYY-MM-DD
+  dueAt?: string; // YYYY-MM-DD
+  paidAt?: string; // YYYY-MM-DD
   status: "paid" | "unpaid" | "overdue";
-  invoiceNumber?: string;
+  reference?: string;
   note?: string;
   createdAt?: any;
   createdBy?: { uid?: string; email?: string | null };
@@ -235,7 +235,8 @@ export default function CompanyDashboard({
   const [monthly, setMonthly] = useState<MonthlyStatsDoc[]>([]);
   const [loadingMonthly, setLoadingMonthly] = useState(false);
 
-  const [billing, setBilling] = useState<(BillingRecordDoc & { id: string })[]>([]);
+  const [billingPayments, setBillingPayments] = useState<(BillingRecordDoc & { id: string })[]>([]);
+  const [billingInvoices, setBillingInvoices] = useState<(BillingRecordDoc & { id: string })[]>([]);
   const [loadingBilling, setLoadingBilling] = useState(false);
 
   const [comms, setComms] = useState<(CommsOutboxDoc & { id: string })[]>([]);
@@ -299,20 +300,44 @@ export default function CompanyDashboard({
   useEffect(() => {
     if (!companyId) return;
     setLoadingBilling(true);
-    const qBilling = query(collection(db, "companies", companyId, "billing"), orderBy("createdAt", "desc"), limit(20));
-    const unsub = onSnapshot(
-      qBilling,
+    const paymentsQuery = query(
+      collection(db, "companies", companyId, "billing_payments"),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    );
+    const invoicesQuery = query(
+      collection(db, "companies", companyId, "billing_invoices"),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    );
+    const unsubPayments = onSnapshot(
+      paymentsQuery,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as any;
-        setBilling(list);
+        setBillingPayments(list);
         setLoadingBilling(false);
       },
       (err) => {
-        console.error("billing error:", err);
+        console.error("billing payments error:", err);
         setLoadingBilling(false);
       }
     );
-    return () => unsub();
+    const unsubInvoices = onSnapshot(
+      invoicesQuery,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as any;
+        setBillingInvoices(list);
+        setLoadingBilling(false);
+      },
+      (err) => {
+        console.error("billing invoices error:", err);
+        setLoadingBilling(false);
+      }
+    );
+    return () => {
+      unsubPayments();
+      unsubInvoices();
+    };
   }, [companyId]);
 
   // --- comms_outbox (read-only, limited)
@@ -352,6 +377,15 @@ export default function CompanyDashboard({
     for (const d of monthly) m.set(d.ym, d);
     return m;
   }, [monthly]);
+
+  const billing = useMemo(() => {
+    const combined = [...billingPayments, ...billingInvoices];
+    return combined.sort((a: any, b: any) => {
+      const aTime = a?.createdAt?.toMillis?.() || 0;
+      const bTime = b?.createdAt?.toMillis?.() || 0;
+      return bTime - aTime;
+    });
+  }, [billingPayments, billingInvoices]);
 
   const sumRange = (startDeltaMonthsInclusive: number, endDeltaMonthsInclusive: number, key: keyof MonthlyStatsDoc) => {
     let s = 0;
@@ -415,7 +449,7 @@ export default function CompanyDashboard({
     const today = new Date().toISOString().slice(0, 10);
     const invoices = billing.filter((b) => b.type === "invoice");
     const paid = invoices.filter((i) => i.status === "paid").length;
-    const overdue = invoices.filter((i) => i.status === "overdue" || (i.status === "unpaid" && i.dueDate && i.dueDate < today)).length;
+    const overdue = invoices.filter((i) => i.status === "overdue" || (i.status === "unpaid" && i.dueAt && i.dueAt < today)).length;
     const unpaid = invoices.filter((i) => i.status === "unpaid").length;
 
     const cutoff = new Date();
@@ -423,7 +457,7 @@ export default function CompanyDashboard({
     const cutoffStr = cutoff.toISOString().slice(0, 10);
 
     const last90 = invoices.filter((i) => {
-      const d = i.dueDate || i.issueDate || "";
+      const d = i.dueAt || i.issuedAt || "";
       return d >= cutoffStr;
     });
 
@@ -805,7 +839,7 @@ export default function CompanyDashboard({
                     .map((r) => (
                       <tr key={r.id} className="text-sm">
                         <td className="p-3 font-semibold text-gray-900">
-                          {r.invoiceNumber ? `#${r.invoiceNumber}` : "—"}
+                          {r.reference ? `#${r.reference}` : "—"}
                         </td>
                         <td className="p-3 text-gray-800">{formatMoney(r.amount, r.currency)}</td>
                         <td className="p-3">
@@ -817,7 +851,7 @@ export default function CompanyDashboard({
                             <span className="text-gray-700">Pendiente</span>
                           )}
                         </td>
-                        <td className="p-3 text-xs text-gray-600">{r.dueDate || "—"}</td>
+                        <td className="p-3 text-xs text-gray-600">{r.dueAt || "—"}</td>
                       </tr>
                     ))
                 )}

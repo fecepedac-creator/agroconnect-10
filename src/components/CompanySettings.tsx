@@ -1,5 +1,6 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { Company, JobOffer } from '../types';
 import { 
   Building2, 
@@ -9,6 +10,7 @@ import {
   Mail,
   Phone
 } from 'lucide-react';
+import { db } from "../firebase";
 
 interface CompanySettingsProps {
   company: Company;
@@ -19,14 +21,32 @@ interface CompanySettingsProps {
 const CompanySettings: React.FC<CompanySettingsProps> = ({ company, onUpdateCompany }) => {
   const [formData, setFormData] = useState<Company>({ ...company });
   const [isSaving, setIsSaving] = useState(false);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const handleSave = () => {
+  useEffect(() => {
+    setFormData({ ...company });
+  }, [company]);
+
+  const handleSave = async () => {
     setIsSaving(true);
-    setTimeout(() => {
+    try {
+      await updateDoc(doc(db, "companies", company.id), {
+        name: formData.name,
+        logoUrl: formData.logoUrl || null,
+        officialPhone: formData.officialPhone || null,
+        hrName: formData.hrName || null,
+        hrEmail: formData.hrEmail || null,
+        hrPhone: formData.hrPhone || null,
+        updatedAt: serverTimestamp(),
+      });
       onUpdateCompany(formData);
+      setNotice({ type: 'success', message: 'Configuración guardada exitosamente.' });
+    } catch (e: any) {
+      console.error("save company settings error:", e);
+      setNotice({ type: 'error', message: 'No se pudo guardar la configuración.' });
+    } finally {
       setIsSaving(false);
-      alert("Configuración de empresa guardada exitosamente.");
-    }, 800);
+    }
   };
 
   return (
@@ -35,6 +55,18 @@ const CompanySettings: React.FC<CompanySettingsProps> = ({ company, onUpdateComp
         <h2 className="text-3xl font-bold text-gray-900 tracking-tight">Configuración de Cuenta</h2>
         <p className="text-gray-500">Administra la información oficial de tu empresa y responsables.</p>
       </div>
+
+      {notice && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            notice.type === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : 'border-red-200 bg-red-50 text-red-700'
+          }`}
+        >
+          {notice.message}
+        </div>
+      )}
 
       <section className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 space-y-8">
         <div>

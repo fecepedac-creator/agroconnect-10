@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Company, JobOffer, Worker, WorkerStatus } from '../types';
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp } from "firebase/firestore";
+import { Company, JobOffer, Worker } from '../types';
 import { generateBroadcastMessage } from '../services/geminiService';
 import { calculateDistance } from '../services/geolocationService';
+import { auth, db } from "../firebase";
 import { 
   Megaphone, 
   Sparkles, 
@@ -47,6 +48,16 @@ interface BroadcastsProps {
 
 type AdTheme = 'OPORTUNIDADES' | 'CONEXION' | 'DIGITAL' | 'TRABAJO' | 'AI_CUSTOM';
 
+type BroadcastRecord = {
+  id: string;
+  jobId?: string;
+  message: string;
+  createdAt?: any;
+  totalTargets?: number;
+  status?: string;
+  createdBy?: { uid?: string; email?: string | null };
+};
+
 const THEMES = {
   OPORTUNIDADES: {
     bg: 'https://images.unsplash.com/photo-1542332213-31f87348057f?q=80&w=1000&auto=format&fit=crop',
@@ -74,6 +85,11 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) 
   const [isGeneratingImg, setIsGeneratingImg] = useState(false);
   const [broadcastText, setBroadcastText] = useState('');
   const [isGeneratingText, setIsGeneratingText] = useState(false);
+  const [broadcastNotice, setBroadcastNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(
+    null
+  );
+  const [broadcastHistory, setBroadcastHistory] = useState<BroadcastRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [searchRadius, setSearchRadius] = useState(30);
   const [isTextCopied, setIsTextCopied] = useState(false);
   
@@ -106,41 +122,53 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) 
     setSelectedWorkerIds(detectedWorkers.map(w => w.id));
   }, [detectedWorkers.length, selectedJobId]);
 
+  useEffect(() => {
+    if (!company?.id) return;
+    setHistoryLoading(true);
+    const q = query(
+      collection(db, "companies", company.id, "broadcasts"),
+      orderBy("createdAt", "desc")
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as BroadcastRecord[];
+        setBroadcastHistory(list);
+        setHistoryLoading(false);
+      },
+      (err) => {
+        console.error("broadcasts history error:", err);
+        setHistoryLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [company?.id]);
+
   const generateAiBackground = async () => {
     if (!selectedJob) return;
-    setIsGeneratingImg(true);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      // Prompt profesional enfocado en publicidad de RRSS
-      const prompt = `Professional commercial advertising photography for Instagram Stories. Background should be a stunning ${selectedJob.category} plantation in ${selectedJob.location}, Chile. Golden hour, cinematic warm light, crisp high-end camera quality. Composition leaves clear space in the center for text overlay. 8k resolution, agricultural excellence.`;
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: [{ parts: [{ text: prompt }] }],
-        config: { imageConfig: { aspectRatio: "9:16" } }
-      });
-
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) {
-          setCustomAiBg(`data:image/png;base64,${part.inlineData.data}`);
-          setSelectedTheme('AI_CUSTOM');
-          break;
-        }
-      }
-    } catch (error) { 
-      console.error("AI Generation Error:", error);
-    } finally { 
-      setIsGeneratingImg(false); 
-    }
+    setBroadcastNotice({
+      type: "info",
+      message: "Generación de arte con IA está en preparación. Usa los estilos disponibles mientras tanto.",
+    });
+    setIsGeneratingImg(false);
   };
 
   const handleGenerateCaption = async () => {
     if (!selectedJob) return;
     setIsGeneratingText(true);
+    setBroadcastNotice(null);
     const context = `Oferta laboral agrícola: ${selectedJob.title} en ${selectedJob.location}. Pago ${selectedJob.paymentType}. Beneficios incluidos. Invitación a postular mediante AgroConnect.`;
-    const text = await generateBroadcastMessage(context);
-    setBroadcastText(text);
-    setIsGeneratingText(false);
+    try {
+      const text = await generateBroadcastMessage(context, "whatsapp");
+      setBroadcastText(text);
+      if (text.toLowerCase().includes("no se pudo")) {
+        setBroadcastNotice({ type: "error", message: text });
+      }
+    } catch (e: any) {
+      setBroadcastNotice({ type: "error", message: "No se pudo generar el mensaje con IA." });
+    } finally {
+      setIsGeneratingText(false);
+    }
   };
 
   const copyTextToClipboard = () => {
@@ -171,9 +199,33 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) 
     }
   };
 
-  const startCampaign = () => {
-    if (selectedWorkerIds.length === 0) return setIsSelectionModalOpen(true);
-    if (!broadcastText) return alert("Por favor redacta el mensaje antes de enviar.");
+  const startCampaign = async () => {
+    if (selectedWorkerIds.length === 0) {
+      setIsSelectionModalOpen(true);
+      return;
+    }
+    if (!broadcastText) {
+      setBroadcastNotice({ type: "error", message: "Por favor redacta el mensaje antes de enviar." });
+      return;
+    }
+    if (company?.id) {
+      try {
+        await addDoc(
+          collection(db, "companies", company.id, "broadcasts"),
+          {
+            jobId: selectedJob?.id || null,
+            message: broadcastText,
+            totalTargets: selectedWorkerIds.length,
+            status: "queued",
+            createdAt: serverTimestamp(),
+            createdBy: { uid: auth.currentUser?.uid, email: auth.currentUser?.email || null },
+          }
+        );
+      } catch (e) {
+        console.error("broadcasts save error:", e);
+        setBroadcastNotice({ type: "error", message: "No se pudo registrar la difusión en Firestore." });
+      }
+    }
     setCurrentDispatchIndex(0);
     setIsDispatching(true);
     setIsSelectionModalOpen(false);
@@ -190,7 +242,10 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) 
       if (currentDispatchIndex === selectedWorkerIds.length - 1) {
         setTimeout(() => {
           setIsDispatching(false);
-          alert(`✅ Difusión WhatsApp completada para ${selectedWorkerIds.length} contactos.`);
+          setBroadcastNotice({
+            type: "success",
+            message: `Difusión WhatsApp completada para ${selectedWorkerIds.length} contactos.`,
+          });
         }, 800);
       } else {
         setCurrentDispatchIndex(prev => prev + 1);
@@ -232,6 +287,20 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) 
           <button onClick={() => setActiveSubTab('HISTORY')} className={`px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeSubTab === 'HISTORY' ? 'bg-gray-900 text-white shadow-2xl scale-105' : 'text-gray-400'}`}>Reportes</button>
         </div>
       </div>
+
+      {broadcastNotice && (
+        <div
+          className={`rounded-2xl border px-4 py-3 text-sm ${
+            broadcastNotice.type === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : broadcastNotice.type === "error"
+                ? "border-red-200 bg-red-50 text-red-700"
+                : "border-amber-200 bg-amber-50 text-amber-800"
+          }`}
+        >
+          {broadcastNotice.message}
+        </div>
+      )}
 
       {activeSubTab === 'ADS' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
@@ -275,8 +344,13 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) 
                <div className="absolute top-0 right-0 p-6 opacity-5 group-hover:rotate-12 transition-transform"><Palette size={120}/></div>
                <div className="flex justify-between items-center relative z-10">
                   <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest flex items-center gap-3 italic"><Camera size={22} className="text-emerald-500"/> 2. Creative Lab IA</h3>
-                  <button onClick={generateAiBackground} disabled={isGeneratingImg} className="flex items-center gap-3 bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded-[1.5rem] text-[10px] font-black uppercase shadow-2xl transition-all active:scale-95 disabled:opacity-50 group">
-                     {isGeneratingImg ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} className="group-hover:animate-bounce" />} Generar Arte IA
+                  <button
+                    onClick={generateAiBackground}
+                    disabled
+                    className="flex items-center gap-3 bg-purple-600/60 text-white px-6 py-3 rounded-[1.5rem] text-[10px] font-black uppercase shadow-2xl transition-all disabled:opacity-60 group cursor-not-allowed"
+                  >
+                     <Sparkles size={16} /> Generar Arte IA
+                     <span className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-[9px] font-bold">En preparación</span>
                   </button>
                </div>
                
@@ -444,9 +518,39 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) 
           </div>
         </div>
       ) : (
-        <div className="bg-white rounded-[5rem] border border-gray-100 shadow-2xl overflow-hidden p-36 text-center text-gray-300 italic">
-           <Megaphone size={100} className="mx-auto mb-10 opacity-10 animate-pulse" />
-           <p className="text-base font-black uppercase tracking-[0.5em]">No History Records</p>
+        <div className="bg-white rounded-[3rem] border border-gray-100 shadow-2xl overflow-hidden p-10">
+          <div className="flex items-center gap-3 mb-6">
+            <Megaphone size={28} className="text-emerald-500" />
+            <div>
+              <div className="text-lg font-black uppercase tracking-[0.2em] text-gray-800">Historial de Difusiones</div>
+              <div className="text-xs text-gray-500">Registros en Firestore</div>
+            </div>
+          </div>
+
+          {historyLoading ? (
+            <div className="text-sm text-gray-400">Cargando historial...</div>
+          ) : broadcastHistory.length === 0 ? (
+            <div className="text-sm text-gray-400">Sin registros aún.</div>
+          ) : (
+            <div className="space-y-4">
+              {broadcastHistory.map((item) => (
+                <div key={item.id} className="border border-gray-100 rounded-2xl p-4 flex flex-col gap-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="font-semibold text-gray-800">
+                      {item.status ? item.status.toString().toUpperCase() : "SIN ESTADO"}
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      {item.createdAt?.toDate ? item.createdAt.toDate().toLocaleString("es-CL") : "—"}
+                    </div>
+                  </div>
+                  <div className="text-sm text-gray-600">{item.message}</div>
+                  <div className="text-xs text-gray-400">
+                    {item.totalTargets ? `${item.totalTargets} destinatarios` : "Destinatarios no definidos"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

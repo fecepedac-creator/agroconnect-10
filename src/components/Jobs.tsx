@@ -43,6 +43,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [activeTab, setActiveTab] = useState<'future' | 'active' | 'closed'>('active');
   const [showMapPicker, setShowMapPicker] = useState(false);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
   const [newJob, setNewJob] = useState<Partial<JobOffer> & { lat?: number; lng?: number }>({
     title: '',
@@ -108,7 +109,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
   const handleGenerateAI = async () => {
     // Validamos que al menos tengamos título y ubicación básica para dar contexto a la IA
     if (!newJob.title || !newJob.location) {
-      alert("⚠️ Por favor ingresa el 'Título' y el 'Nombre de Ubicación' para que la IA pueda redactar la oferta.");
+      setNotice({ type: 'error', message: "Ingresa el título y la ubicación para generar la oferta con IA." });
       return;
     }
 
@@ -128,9 +129,12 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
     try {
       const result = await generateJobDescription(context);
       setNewJob(prev => ({ ...prev, description: result }));
+      if (result.toLowerCase().includes("no se pudo")) {
+        setNotice({ type: 'error', message: result });
+      }
     } catch (error) {
       console.error(error);
-      alert("Hubo un problema generando la descripción con IA.");
+      setNotice({ type: 'error', message: "Hubo un problema generando la descripción con IA." });
     } finally {
       setIsGenerating(false);
     }
@@ -147,7 +151,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
         location: prev.location || 'Ubicación GPS capturada'
       }));
     } catch (error) {
-      alert("No se pudo obtener la ubicación GPS automática.");
+      setNotice({ type: 'error', message: "No se pudo obtener la ubicación GPS automática." });
     } finally {
       setIsGettingLocation(false);
     }
@@ -164,7 +168,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
 
   const handleCreateJob = async () => {
     if (!newJob.title || !newJob.description) {
-      alert("Completa el título y la descripción antes de publicar.");
+      setNotice({ type: 'error', message: "Completa el título y la descripción antes de publicar." });
       return;
     }
     
@@ -174,7 +178,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
         : { lat: -33.4489, lng: -70.6693 };
 
     if (!currentCompany?.id) {
-      alert("No hay empresa activa. Vuelve a iniciar sesión como empresa.");
+      setNotice({ type: 'error', message: "No hay empresa activa. Vuelve a iniciar sesión como empresa." });
       return;
     }
 
@@ -202,6 +206,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
 
       setShowForm(false);
       setActiveTab('future');
+      setNotice({ type: 'success', message: "Oferta creada correctamente." });
       setNewJob({
         title: '',
         description: '',
@@ -218,7 +223,22 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
       });
     } catch (error: any) {
       console.error(error);
-      alert(`No se pudo publicar la oferta: ${error?.message || error}`);
+      setNotice({ type: 'error', message: `No se pudo publicar la oferta: ${error?.message || error}` });
+    }
+  };
+
+  const handleDeleteJob = async (jobId: string) => {
+    if (!confirm('¿Eliminar?')) return;
+    if (!currentCompany?.id) {
+      setNotice({ type: 'error', message: 'No hay empresa activa.' });
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, 'companies', currentCompany.id, 'jobs', jobId));
+      setNotice({ type: 'success', message: 'Oferta eliminada.' });
+    } catch (e: any) {
+      console.error(e);
+      setNotice({ type: 'error', message: `No se pudo eliminar: ${e?.message || e}` });
     }
   };
 
@@ -231,6 +251,20 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-4 animate-in slide-in-from-top">
            <div className="bg-red-100 p-2 rounded-full text-red-600"><AlertOctagon size={24} /></div>
            <div><h3 className="font-bold text-red-800">Cuenta Suspendida</h3><p className="text-sm text-red-600">Regularice su deuda para publicar nuevas ofertas.</p></div>
+        </div>
+      )}
+
+      {notice && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            notice.type === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : notice.type === 'error'
+                ? 'border-red-200 bg-red-50 text-red-700'
+                : 'border-amber-200 bg-amber-50 text-amber-800'
+          }`}
+        >
+          {notice.message}
         </div>
       )}
 
@@ -392,7 +426,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
             </div>
             <div className="bg-gray-50 p-4 flex gap-2 border-t border-gray-100">
               <button className="flex-1 bg-white border border-gray-200 text-[10px] font-black uppercase tracking-widest py-2.5 rounded-xl hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all shadow-sm">Postulantes</button>
-              <button onClick={async () => { if(!confirm('¿Eliminar?')) return; if(!currentCompany?.id) return; try { await deleteDoc(doc(db, 'companies', currentCompany.id, 'jobs', job.id)); } catch(e:any){ console.error(e); alert(`No se pudo eliminar: ${e?.message || e}`);} }} className="p-2.5 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
+              <button onClick={() => handleDeleteJob(job.id)} className="p-2.5 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
             </div>
           </div>
         ))}

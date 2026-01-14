@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
   collection,
@@ -7,7 +7,8 @@ import {
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "./firebase";
 
 import {
   LayoutDashboard,
@@ -79,6 +80,15 @@ const App: React.FC = () => {
   const [adminTab, setAdminTab] = useState<AdminTab>("OVERVIEW");
 
   const handleRadarClick = () => setCurrentView(AppView.GLOBAL_SEARCH);
+  const isDemoMode = Boolean(adminConfig.demoMode);
+  const SUPERADMIN_EMAILS = useMemo(
+    () =>
+      String((import.meta as any)?.env?.VITE_SUPERADMIN_EMAILS ?? "fecepedac@gmail.com")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    []
+  );
 
   const handleRoleSelect = (role: UserRole, companyData?: Company) => {
     setUserRole(role);
@@ -152,12 +162,12 @@ const App: React.FC = () => {
     setCompaniesError(null);
     try {
       const list = await getCompanies({
-        demoMode: Boolean(adminConfig.demoMode),
+        demoMode: false,
         demoCompanies: DEMO_COMPANIES,
       });
       setCompanies(list);
       // eslint-disable-next-line no-console
-      console.info(`[Empresas] Cargadas ${list.length} compañías ${adminConfig.demoMode ? "(modo demo)" : "reales"}.`);
+      console.info(`[Empresas] Cargadas ${list.length} compañías reales.`);
     } catch (e: any) {
       setCompanies([]);
       setCompaniesError("No se pudieron cargar las empresas. Intenta nuevamente.");
@@ -170,7 +180,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     void loadCompanies();
-  }, [adminConfig.demoMode]);
+  }, []);
 
   useEffect(() => {
     const loadAdminConfig = async () => {
@@ -188,6 +198,20 @@ const App: React.FC = () => {
     };
     loadAdminConfig();
   }, []);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (!user?.email) return;
+      const email = user.email.trim().toLowerCase();
+      if (SUPERADMIN_EMAILS.includes(email)) {
+        setUserRole(UserRole.ADMIN);
+        setCurrentCompany(null);
+        setAdminTab("OVERVIEW");
+        setCurrentView(AppView.ADMIN);
+      }
+    });
+    return () => unsub();
+  }, [SUPERADMIN_EMAILS]);
 
   const handleAdminConfigSave = async (config: AdminConfig) => {
     setAdminConfig(config);
@@ -330,6 +354,7 @@ const App: React.FC = () => {
               workers={workers}
               globalWorkers={globalWorkers}
               onRadarClick={handleRadarClick}
+              demoMode={isDemoMode}
             />
           )}
           {currentView === AppView.WORKERS && <Workers workers={workers} setWorkers={setWorkers} />}
@@ -365,7 +390,34 @@ const App: React.FC = () => {
             <GlobalSearch globalWorkers={globalWorkers} onInviteWorker={handleInviteWorker} />
           )}
           {currentView === AppView.SETTINGS_COMPANY &&
-            (currentCompany ? (
+            (userRole === UserRole.ADMIN ? (
+              currentCompany ? (
+                <CompanySettings company={currentCompany} jobs={jobs} onUpdateCompany={handleUpdateCompany} />
+              ) : (
+                <div className="bg-white border border-gray-100 rounded-2xl p-6">
+                  <div className="text-lg font-bold text-gray-800 mb-2">Ajustes de Empresa</div>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Selecciona una empresa para editar sus datos oficiales. La lista usa la misma fuente de
+                    “Empresas”.
+                  </p>
+                  <div className="space-y-2">
+                    {companies.map((company) => (
+                      <button
+                        key={company.id}
+                        onClick={() => setCurrentCompany(company)}
+                        className="w-full text-left border border-gray-200 rounded-xl px-4 py-3 hover:bg-emerald-50"
+                      >
+                        <div className="font-semibold text-gray-800">{company.name}</div>
+                        <div className="text-xs text-gray-500">{company.region || company.rut || "—"}</div>
+                      </button>
+                    ))}
+                    {companies.length === 0 && (
+                      <div className="text-sm text-gray-500">No hay empresas disponibles.</div>
+                    )}
+                  </div>
+                </div>
+              )
+            ) : currentCompany ? (
               <CompanySettings company={currentCompany} jobs={jobs} onUpdateCompany={handleUpdateCompany} />
             ) : (
               <div className="text-sm text-gray-500">Selecciona una empresa para ver los ajustes.</div>

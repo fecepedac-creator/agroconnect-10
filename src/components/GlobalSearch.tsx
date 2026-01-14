@@ -16,6 +16,7 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ onInviteWorker, globalWorke
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
   const [isLoadingLoc, setIsLoadingLoc] = useState(false);
   const [results, setResults] = useState<Worker[]>(globalWorkers);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Initialize with location
   useEffect(() => {
@@ -69,7 +70,7 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ onInviteWorker, globalWorke
   }, [searchTerm, radius, selectedSkill, userLocation, globalWorkers]);
 
   const handleInvite = (worker: Worker) => {
-    alert(`Invitación enviada a ${worker.name}.\n\nSe ha enviado una notificación push y un SMS para que postule a tus ofertas.`);
+    setNotice(`Invitación enviada a ${worker.name}. Se notificó para que postule a tus ofertas.`);
     onInviteWorker(worker); 
   };
 
@@ -81,6 +82,12 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ onInviteWorker, globalWorke
          </h2>
          <p className="text-gray-500 text-sm">Encuentra trabajadores disponibles fuera de tu organización.</p>
       </div>
+
+      {notice && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 text-blue-700 px-4 py-3 text-sm">
+          {notice}
+        </div>
+      )}
 
       {/* Filters Panel */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">

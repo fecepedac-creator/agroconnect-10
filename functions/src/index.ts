@@ -19,12 +19,7 @@ const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 const GMAIL_USER = "agroconnect@gmail.com";
 const GMAIL_REPLY_TO = "fecepedac@gmail.com";
 const DEFAULT_FROM_NAME = "AgroConnect";
-const SUPERADMIN_EMAILS = [
-  "fecepedac@gmail.com",
-  "fecepedac@hospitaldetalca.cl",
-  "fecepedac@hotmail.com",
-  "administracion@agroconnecto.cl",
-];
+const SUPERADMIN_EMAILS = ["fecepedac@gmail.com"];
 
 function isSuperAdminToken(token: any): boolean {
   const email = String(token?.email || "").toLowerCase();
@@ -36,6 +31,52 @@ function isSuperAdminToken(token: any): boolean {
     role === "superadmin" ||
     SUPERADMIN_EMAILS.includes(email)
   );
+}
+
+async function assertAuthenticated(request: any) {
+  const user = request.auth;
+  if (!user?.uid || !user?.token?.email) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+  return user;
+}
+
+async function getUserRole(uid: string): Promise<string> {
+  try {
+    const snap = await db.collection("users").doc(uid).get();
+    return String(snap.data()?.role || "none");
+  } catch (e) {
+    console.error("getUserRole error:", e);
+    return "none";
+  }
+}
+
+async function callGeminiText(apiKey: string, prompt: string, temperature = 0.3): Promise<string> {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature,
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new HttpsError("internal", `Gemini error: ${text.slice(0, 500)}`);
+  }
+
+  const data = (await response.json()) as any;
+  const contentText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!contentText) {
+    throw new HttpsError("internal", "Respuesta vacía desde Gemini.");
+  }
+  return contentText.trim();
 }
 
 async function getReplyToEmail(): Promise<string> {
@@ -483,10 +524,7 @@ export const runOperationalAudit = onCall(
     secrets: [GEMINI_API_KEY],
   },
   async (request) => {
-    const user = request.auth;
-    if (!user?.uid || !user?.token) {
-      throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
-    }
+    const user = await assertAuthenticated(request);
     if (!isSuperAdminToken(user.token)) {
       throw new HttpsError("permission-denied", "No tienes permisos para ejecutar auditorías.");
     }
@@ -601,6 +639,161 @@ Incluye las notas de calidad de datos, y agrega otras si detectas inconsistencia
       ok: true,
       metrics,
       analysis,
+      auditId: auditRef.id,
+    };
+  }
+);
+
+/**
+ * =========================
+ *  IA PARA DIFUSIONES Y DESCRIPCIONES
+ * =========================
+ */
+export const redactarDifusion = onCall(
+  {
+    region: "us-central1",
+    secrets: [GEMINI_API_KEY],
+  },
+  async (request) => {
+    const user = await assertAuthenticated(request);
+    const apiKey = GEMINI_API_KEY.value();
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "IA no configurada aún.");
+    }
+
+    const role = await getUserRole(user.uid);
+    if (!isSuperAdminToken(user.token) && !["company_admin", "company_hr"].includes(role)) {
+      throw new HttpsError("permission-denied", "No tienes permisos para usar la IA.");
+    }
+
+    const context = String(request.data?.context || "").trim();
+    const campaignType = String(request.data?.campaignType || "general").trim();
+    if (!context) {
+      throw new HttpsError("invalid-argument", "Contexto requerido.");
+    }
+
+    const prompt = `Eres redactor experto en reclutamiento agrícola. Redacta un mensaje breve para WhatsApp.
+Tipo de campaña: ${campaignType}
+Contexto: ${context}
+Incluye CTA directo a postular y tono cercano. Máximo 600 caracteres.`;
+
+    const text = await callGeminiText(apiKey, prompt, 0.4);
+
+    return { ok: true, text };
+  }
+);
+
+export const generateJobDescription = onCall(
+  {
+    region: "us-central1",
+    secrets: [GEMINI_API_KEY],
+  },
+  async (request) => {
+    const user = await assertAuthenticated(request);
+    const apiKey = GEMINI_API_KEY.value();
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "IA no configurada aún.");
+    }
+
+    const role = await getUserRole(user.uid);
+    if (!isSuperAdminToken(user.token) && !["company_admin", "company_hr"].includes(role)) {
+      throw new HttpsError("permission-denied", "No tienes permisos para usar la IA.");
+    }
+
+    const basicInfo = String(request.data?.basicInfo || "").trim();
+    if (!basicInfo) {
+      throw new HttpsError("invalid-argument", "Información base requerida.");
+    }
+
+    const prompt = `Actúa como un experto en Reclutamiento Agrícola para el mercado chileno. Redacta una oferta laboral clara y profesional para: ${basicInfo}`;
+    const text = await callGeminiText(apiKey, prompt, 0.3);
+
+    return { ok: true, text };
+  }
+);
+
+export const aiReview = onCall(
+  {
+    region: "us-central1",
+    secrets: [GEMINI_API_KEY],
+  },
+  async (request) => {
+    const user = await assertAuthenticated(request);
+    if (!isSuperAdminToken(user.token)) {
+      throw new HttpsError("permission-denied", "No tienes permisos para ejecutar AI Review.");
+    }
+
+    const apiKey = GEMINI_API_KEY.value();
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "IA no configurada aún.");
+    }
+
+    const subject = String(request.data?.subject || "").trim();
+    const context = String(request.data?.context || "").trim();
+    if (!subject) {
+      throw new HttpsError("invalid-argument", "Debes indicar el sujeto de revisión.");
+    }
+
+    const prompt = `Eres auditor operativo. Analiza el siguiente sujeto y devuelve JSON estricto:
+{
+  "summary": "string breve",
+  "checklist": ["..."],
+  "risks": ["..."],
+  "nextSteps": ["..."]
+}
+
+Sujeto: ${subject}
+Contexto adicional: ${context || "N/A"}`;
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: "application/json",
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new HttpsError("internal", `Gemini error: ${text.slice(0, 500)}`);
+    }
+
+    const data = (await response.json()) as any;
+    const contentText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!contentText) {
+      throw new HttpsError("internal", "Respuesta vacía desde Gemini.");
+    }
+
+    let output: any;
+    try {
+      output = JSON.parse(contentText);
+    } catch (e) {
+      console.error("aiReview parse error:", e);
+      throw new HttpsError("internal", "Respuesta de IA no es JSON válido.");
+    }
+
+    const auditRef = db.collection("audits").doc();
+    await auditRef.set({
+      createdAt: FieldValue.serverTimestamp(),
+      inputs: { subject, context },
+      output,
+      meta: {
+        type: "ai_review",
+        requestedByUid: user.uid,
+        requestedByEmail: user.token.email || null,
+      },
+    });
+
+    return {
+      ok: true,
+      output,
       auditId: auditRef.id,
     };
   }
