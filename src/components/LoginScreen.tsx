@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from "react";
-import { GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+import React, { useEffect, useMemo, useState } from "react";
+import { GoogleAuthProvider, getRedirectResult, signInWithRedirect, signOut } from "firebase/auth";
 import { auth } from "../firebase";
-import { loginCompanyWithGoogle } from "../services/authCompany";
+import { completeCompanyLogin, startCompanyLogin } from "../services/authCompany";
 import { UserRole, type Company, type Lead } from "../types";
 
 type Props = {
@@ -24,6 +24,7 @@ export default function LoginScreen({
   onSelectRole,
   onRegisterLead,
 }: Props) {
+  const LOGIN_INTENT_KEY = "agroconnect_login_intent";
   const [loading, setLoading] = useState<null | "worker" | "admin" | "companyAdmin">(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,7 +52,7 @@ export default function LoginScreen({
 
   // Allowlist de superadmins por email (rápido para empezar)
   const SUPERADMIN_EMAILS = useMemo(() => {
-    const raw = (import.meta as any)?.env?.VITE_SUPERADMIN_EMAILS ?? "";
+    const raw = (import.meta as any)?.env?.VITE_SUPERADMIN_EMAILS ?? "fecepedac@gmail.com";
     return String(raw)
       .split(",")
       .map((s) => s.trim().toLowerCase())
@@ -124,17 +125,10 @@ export default function LoginScreen({
     setError(null);
     setLoading("companyAdmin");
     try {
-      await loginCompanyWithGoogle();
-      onSelectRole(UserRole.COMPANY, company);
-      setOpenCompanies(false);
+      sessionStorage.setItem(LOGIN_INTENT_KEY, JSON.stringify({ role: "companyAdmin", companyId: company.id }));
+      await startCompanyLogin();
     } catch (e: any) {
-      const msg = String(e?.message || "");
-      // Mensaje más claro para el caso que estás viendo
-      if (msg.includes("auth/popup-closed-by-user")) {
-        setError("Se cerró la ventana de Google antes de terminar. Reintenta y permite pop-ups para este sitio.");
-      } else {
-        setError(e?.message || "No se pudo iniciar sesión con Google.");
-      }
+      setError(e?.message || "No se pudo iniciar sesión con Google.");
     } finally {
       setLoading(null);
     }
@@ -193,34 +187,64 @@ export default function LoginScreen({
     setLoading("admin");
     try {
       const provider = new GoogleAuthProvider();
-      const cred = await signInWithPopup(auth, provider);
-      const email = (cred.user.email || "").trim().toLowerCase();
-
-      if (!email) {
-        await signOut(auth);
-        alert("Tu cuenta Google no tiene email disponible. Intenta con otra cuenta.");
-        return;
-      }
-
-      if (SUPERADMIN_EMAILS.length === 0) {
-        await signOut(auth);
-        alert("SuperAdmin no configurado.\n\nDefine VITE_SUPERADMIN_EMAILS en .env (emails separados por coma) y vuelve a desplegar.");
-        return;
-      }
-
-      if (!SUPERADMIN_EMAILS.includes(email)) {
-        await signOut(auth);
-        alert("No tienes permisos de SuperAdmin para esta app.");
-        return;
-      }
-
-      onSelectRole(UserRole.ADMIN);
+      sessionStorage.setItem(LOGIN_INTENT_KEY, JSON.stringify({ role: "admin" }));
+      await signInWithRedirect(auth, provider);
     } catch (e: any) {
       setError(e?.message || "No se pudo iniciar sesión de SuperAdmin.");
     } finally {
       setLoading(null);
     }
   };
+
+  useEffect(() => {
+    const consumeRedirect = async () => {
+      const rawIntent = sessionStorage.getItem(LOGIN_INTENT_KEY);
+      if (!rawIntent) return;
+      const intent = JSON.parse(rawIntent) as { role?: "admin" | "companyAdmin"; companyId?: string };
+
+      try {
+        if (intent.role === "admin") {
+          const cred = await getRedirectResult(auth);
+          if (!cred?.user) return;
+          const email = (cred.user.email || "").trim().toLowerCase();
+          if (!email) {
+            await signOut(auth);
+            setError("Tu cuenta Google no tiene email disponible. Intenta con otra cuenta.");
+            return;
+          }
+          if (SUPERADMIN_EMAILS.length === 0) {
+            await signOut(auth);
+            setError("SuperAdmin no configurado. Define VITE_SUPERADMIN_EMAILS en .env (emails separados por coma).");
+            return;
+          }
+          if (!SUPERADMIN_EMAILS.includes(email)) {
+            await signOut(auth);
+            setError("No tienes permisos de SuperAdmin para esta app.");
+            return;
+          }
+          onSelectRole(UserRole.ADMIN);
+        }
+
+        if (intent.role === "companyAdmin") {
+          const user = await completeCompanyLogin();
+          if (!user) return;
+          const company = companies.find((c) => c.id === intent.companyId);
+          if (!company) {
+            setError("No se encontró la empresa seleccionada. Intenta nuevamente.");
+            return;
+          }
+          onSelectRole(UserRole.COMPANY, company);
+          setOpenCompanies(false);
+        }
+      } catch (e: any) {
+        setError(e?.message || "No se pudo completar el inicio de sesión.");
+      } finally {
+        sessionStorage.removeItem(LOGIN_INTENT_KEY);
+      }
+    };
+
+    void consumeRedirect();
+  }, [companies, onSelectRole, SUPERADMIN_EMAILS]);
 
   // Atenuación de paneles según hover
   const leftDim = hoverSide === "company";

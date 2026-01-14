@@ -182,11 +182,11 @@ type BillingRecordDoc = {
   type: "invoice" | "payment";
   amount: number;
   currency: "CLP" | "USD";
-  issueDate?: string; // YYYY-MM-DD
-  dueDate?: string; // YYYY-MM-DD
-  paidDate?: string; // YYYY-MM-DD
+  issuedAt?: string; // YYYY-MM-DD
+  dueAt?: string; // YYYY-MM-DD
+  paidAt?: string; // YYYY-MM-DD
   status: "paid" | "unpaid" | "overdue";
-  invoiceNumber?: string;
+  reference?: string;
   note?: string;
   createdAt?: any;
   createdBy?: { uid?: string; email?: string | null };
@@ -401,7 +401,8 @@ export default function AdminPanel(props: AdminPanelProps) {
   const [selectedCompanyLoading, setSelectedCompanyLoading] = useState(false);
 
   // Company billing history (facturas/pagos)
-  const [billingRecords, setBillingRecords] = useState<(BillingRecordDoc & { id: string })[]>([]);
+  const [billingPayments, setBillingPayments] = useState<(BillingRecordDoc & { id: string })[]>([]);
+  const [billingInvoices, setBillingInvoices] = useState<(BillingRecordDoc & { id: string })[]>([]);
   const [loadingBilling, setLoadingBilling] = useState(false);
 
   // Billing record modal
@@ -409,12 +410,13 @@ export default function AdminPanel(props: AdminPanelProps) {
   const [billingType, setBillingType] = useState<BillingRecordDoc["type"]>("invoice");
   const [billingAmount, setBillingAmount] = useState<string>("");
   const [billingCurrency, setBillingCurrency] = useState<BillingRecordDoc["currency"]>("CLP");
-  const [billingIssueDate, setBillingIssueDate] = useState<string>("");
-  const [billingDueDate, setBillingDueDate] = useState<string>("");
-  const [billingPaidDate, setBillingPaidDate] = useState<string>("");
-  const [billingInvoiceNumber, setBillingInvoiceNumber] = useState<string>("");
+  const [billingIssuedAt, setBillingIssuedAt] = useState<string>("");
+  const [billingDueAt, setBillingDueAt] = useState<string>("");
+  const [billingPaidAt, setBillingPaidAt] = useState<string>("");
+  const [billingReference, setBillingReference] = useState<string>("");
   const [billingNote, setBillingNote] = useState<string>("");
   const [billingSaving, setBillingSaving] = useState(false);
+  const [billingError, setBillingError] = useState<string | null>(null);
 
   // Comms (outbox) modal
   const [commsModalOpen, setCommsModalOpen] = useState(false);
@@ -429,6 +431,10 @@ export default function AdminPanel(props: AdminPanelProps) {
 
   // Search
   const [search, setSearch] = useState("");
+
+  const notify = (type: "success" | "error" | "info", message: string) => {
+    setPanelMessage({ type, message });
+  };
 
   // Global stats + monthly
   const [globalStats, setGlobalStats] = useState<GlobalStatsDoc | null>(null);
@@ -468,6 +474,9 @@ export default function AdminPanel(props: AdminPanelProps) {
   const [description, setDescription] = useState("");
   const [website, setWebsite] = useState("");
   const [billingEmail, setBillingEmail] = useState("");
+  const [panelMessage, setPanelMessage] = useState<{ type: "success" | "error" | "info"; message: string } | null>(
+    null
+  );
   const [legalName, setLegalName] = useState("");
   const [tagsInput, setTagsInput] = useState("");
 
@@ -631,29 +640,50 @@ export default function AdminPanel(props: AdminPanelProps) {
 
   useEffect(() => {
     if (!selectedCompanyId) {
-      setBillingRecords([]);
+      setBillingPayments([]);
+      setBillingInvoices([]);
       setLoadingBilling(false);
       return;
     }
     setLoadingBilling(true);
-    const qBilling = query(
-      collection(db, "companies", selectedCompanyId, "billing"),
+    const paymentsQuery = query(
+      collection(db, "companies", selectedCompanyId, "billing_payments"),
       orderBy("createdAt", "desc"),
       limit(20)
     );
-    const unsub = onSnapshot(
-      qBilling,
+    const invoicesQuery = query(
+      collection(db, "companies", selectedCompanyId, "billing_invoices"),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    );
+    const unsubPayments = onSnapshot(
+      paymentsQuery,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as any;
-        setBillingRecords(list);
+        setBillingPayments(list);
         setLoadingBilling(false);
       },
       (err) => {
-        console.error("billing error:", err);
+        console.error("billing payments error:", err);
         setLoadingBilling(false);
       }
     );
-    return () => unsub();
+    const unsubInvoices = onSnapshot(
+      invoicesQuery,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as any;
+        setBillingInvoices(list);
+        setLoadingBilling(false);
+      },
+      (err) => {
+        console.error("billing invoices error:", err);
+        setLoadingBilling(false);
+      }
+    );
+    return () => {
+      unsubPayments();
+      unsubInvoices();
+    };
   }, [selectedCompanyId]);
 
   // --------- Derived data ---------
@@ -674,6 +704,14 @@ export default function AdminPanel(props: AdminPanelProps) {
   }, [companies, search]);
 
   const monthDoc = useMemo(() => monthlyStats.find((x) => x.ym === selectedYm) || null, [monthlyStats, selectedYm]);
+  const billingRecords = useMemo(() => {
+    const combined = [...billingPayments, ...billingInvoices];
+    return combined.sort((a: any, b: any) => {
+      const aTime = a?.createdAt?.toMillis?.() || 0;
+      const bTime = b?.createdAt?.toMillis?.() || 0;
+      return bTime - aTime;
+    });
+  }, [billingPayments, billingInvoices]);
 
   const effectiveGlobal = useMemo(() => {
     // Fallback: si stats aún no están creadas, estimar con companies list.
@@ -756,11 +794,12 @@ export default function AdminPanel(props: AdminPanelProps) {
     setBillingType(type);
     setBillingAmount("");
     setBillingCurrency("CLP");
-    setBillingIssueDate(type === "invoice" ? today : "");
-    setBillingDueDate("");
-    setBillingPaidDate(type === "payment" ? today : "");
-    setBillingInvoiceNumber("");
+    setBillingIssuedAt(type === "invoice" ? today : "");
+    setBillingDueAt("");
+    setBillingPaidAt(type === "payment" ? today : "");
+    setBillingReference("");
     setBillingNote("");
+    setBillingError(null);
     setBillingModalOpen(true);
   }
 
@@ -824,7 +863,7 @@ export default function AdminPanel(props: AdminPanelProps) {
     if (!selectedCompanyId) return;
     const amt = Number(billingAmount);
     if (!amt || !isFinite(amt) || amt <= 0) {
-      alert("Monto inválido.");
+      setBillingError("Monto inválido.");
       return;
     }
 
@@ -832,22 +871,23 @@ export default function AdminPanel(props: AdminPanelProps) {
     const status: BillingRecordDoc["status"] =
       billingType === "payment"
         ? "paid"
-        : billingDueDate && billingDueDate < today
+        : billingDueAt && billingDueAt < today
           ? "overdue"
           : "unpaid";
 
     setBillingSaving(true);
     try {
-      await addDoc(collection(db, "companies", selectedCompanyId, "billing"),
+      const targetCollection = billingType === "payment" ? "billing_payments" : "billing_invoices";
+      await addDoc(collection(db, "companies", selectedCompanyId, targetCollection),
         stripUndefinedDeep({
           type: billingType,
           amount: amt,
           currency: billingCurrency,
-          issueDate: billingIssueDate || undefined,
-          dueDate: billingDueDate || undefined,
-          paidDate: billingPaidDate || undefined,
+          issuedAt: billingIssuedAt || undefined,
+          dueAt: billingDueAt || undefined,
+          paidAt: billingPaidAt || undefined,
           status,
-          invoiceNumber: billingInvoiceNumber.trim() || undefined,
+          reference: billingReference.trim() || undefined,
           note: billingNote.trim() || undefined,
           createdAt: serverTimestamp(),
           createdBy: { uid: me?.uid, email: me?.email || null },
@@ -863,9 +903,10 @@ export default function AdminPanel(props: AdminPanelProps) {
       }
 
       setBillingModalOpen(false);
+      notify("success", `Registro de ${billingType === "payment" ? "pago" : "factura"} guardado.`);
     } catch (e: any) {
       console.error(e);
-      alert("No se pudo guardar registro de facturación: " + (e?.message || e));
+      setBillingError(`No se pudo guardar registro de facturación: ${e?.message || e}`);
     } finally {
       setBillingSaving(false);
     }
@@ -875,11 +916,11 @@ export default function AdminPanel(props: AdminPanelProps) {
     if (!selectedCompanyId || !selectedCompanyDoc) return;
     const to = (selectedCompanyDoc.billingEmail || selectedCompanyDoc.contactEmail || selectedCompanyDoc.adminEmail || "").trim();
     if (!to) {
-      alert("La empresa no tiene email de contacto/facturación.");
+      notify("error", "La empresa no tiene email de contacto/facturación.");
       return;
     }
     if (!commsSubject.trim() || !commsText.trim()) {
-      alert("Asunto y mensaje no pueden ir vacíos.");
+      notify("error", "Asunto y mensaje no pueden ir vacíos.");
       return;
     }
 
@@ -900,10 +941,10 @@ export default function AdminPanel(props: AdminPanelProps) {
         } satisfies CommsOutboxDoc)
       );
       setCommsModalOpen(false);
-      alert("Mensaje encolado. (Se registró en comms_outbox)");
+      notify("success", "Mensaje encolado (comms_outbox).");
     } catch (e: any) {
       console.error(e);
-      alert("No se pudo encolar el mensaje: " + (e?.message || e));
+      notify("error", `No se pudo encolar el mensaje: ${e?.message || e}`);
     } finally {
       setCommsSending(false);
     }
@@ -949,7 +990,7 @@ export default function AdminPanel(props: AdminPanelProps) {
       }
     }
     if (!data) {
-      alert("No se pudo cargar la empresa para editar.");
+      notify("error", "No se pudo cargar la empresa para editar.");
       return;
     }
     setSelectedCompanyId(companyId);
@@ -992,7 +1033,7 @@ export default function AdminPanel(props: AdminPanelProps) {
   async function handleSaveCompany() {
     const msg = validateForm();
     if (msg) {
-      alert(msg);
+      notify("error", msg);
       return;
     }
 
@@ -1040,7 +1081,7 @@ export default function AdminPanel(props: AdminPanelProps) {
         setModalOpen(false);
       } else {
         if (!selectedCompanyId) {
-          alert("No hay empresa seleccionada para editar.");
+          notify("error", "No hay empresa seleccionada para editar.");
           return;
         }
         const ref = doc(db, "companies", selectedCompanyId);
@@ -1079,7 +1120,7 @@ export default function AdminPanel(props: AdminPanelProps) {
       }
     } catch (e: any) {
       console.error("save company error:", e);
-      alert("No se pudo guardar empresa: " + (e?.message || "error"));
+      notify("error", `No se pudo guardar empresa: ${e?.message || "error"}`);
     } finally {
       setSaving(false);
     }
@@ -1105,21 +1146,21 @@ export default function AdminPanel(props: AdminPanelProps) {
         await setDoc(doc(db, "finops_infra", selectedYm), payload as any, { merge: true });
       });
 
-      alert("FinOps (infra) guardado.");
+      notify("success", "FinOps (infra) guardado.");
     } catch (e: any) {
       console.error(e);
-      alert("No se pudo guardar FinOps infra: " + (e?.message || e));
+      notify("error", `No se pudo guardar FinOps infra: ${e?.message || e}`);
     }
   }
 
   async function addManualExpense() {
     const amt = Number(expAmount);
     if (!Number.isFinite(amt) || amt <= 0) {
-      alert("Monto inválido.");
+      notify("error", "Monto inválido.");
       return;
     }
     if (!/^\d{4}-\d{2}$/.test(expStartMonth)) {
-      alert("Mes inválido (YYYY-MM).");
+      notify("error", "Mes inválido (YYYY-MM).");
       return;
     }
     const months = expRecurrence === "once" ? 1 : Math.max(1, clampInt(expMonths, 1));
@@ -1148,10 +1189,10 @@ export default function AdminPanel(props: AdminPanelProps) {
       setExpMonths("1");
       setExpStartMonth(selectedYm);
 
-      alert("Gasto registrado.");
+      notify("success", "Gasto registrado.");
     } catch (e: any) {
       console.error(e);
-      alert("No se pudo registrar gasto: " + (e?.message || e));
+      notify("error", `No se pudo registrar gasto: ${e?.message || e}`);
     }
   }
 
@@ -1658,10 +1699,10 @@ export default function AdminPanel(props: AdminPanelProps) {
                             status: "Overdue",
                             updatedAt: serverTimestamp(),
                           } as any);
-                          alert("Empresa marcada como morosa.");
+                          notify("success", "Empresa marcada como morosa.");
                         } catch (e: any) {
                           console.error(e);
-                          alert("No se pudo actualizar estado: " + (e?.message || e));
+                          notify("error", `No se pudo actualizar estado: ${e?.message || e}`);
                         }
                       }}
                       className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
@@ -1676,10 +1717,10 @@ export default function AdminPanel(props: AdminPanelProps) {
                             status: "Active",
                             updatedAt: serverTimestamp(),
                           } as any);
-                          alert("Empresa marcada al día.");
+                          notify("success", "Empresa marcada al día.");
                         } catch (e: any) {
                           console.error(e);
-                          alert("No se pudo actualizar estado: " + (e?.message || e));
+                          notify("error", `No se pudo actualizar estado: ${e?.message || e}`);
                         }
                       }}
                       className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
@@ -1761,7 +1802,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                           <tr key={r.id} className="text-sm">
                             <td className="p-3 font-semibold text-gray-900">
                               {r.type === "invoice" ? "Factura" : "Pago"}
-                              {r.invoiceNumber ? <span className="ml-2 text-xs text-gray-500">#{r.invoiceNumber}</span> : null}
+                              {r.reference ? <span className="ml-2 text-xs text-gray-500">#{r.reference}</span> : null}
                             </td>
                             <td className="p-3 text-gray-800">
                               {formatMoney(r.amount, r.currency)}
@@ -1780,9 +1821,9 @@ export default function AdminPanel(props: AdminPanelProps) {
                               )}
                             </td>
                             <td className="p-3 text-xs text-gray-600">
-                              {r.issueDate ? `Emisión: ${r.issueDate}` : ""}
-                              {r.dueDate ? ` · Vence: ${r.dueDate}` : ""}
-                              {r.paidDate ? ` · Pagado: ${r.paidDate}` : ""}
+                              {r.issuedAt ? `Emisión: ${r.issuedAt}` : ""}
+                              {r.dueAt ? ` · Vence: ${r.dueAt}` : ""}
+                              {r.paidAt ? ` · Pagado: ${r.paidAt}` : ""}
                             </td>
                           </tr>
                         ))}
@@ -2118,6 +2159,11 @@ export default function AdminPanel(props: AdminPanelProps) {
                 <span className="hidden sm:inline-flex text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
                   SUPERADMIN
                 </span>
+                {props.isDemoMode && (
+                  <span className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                    DEMO
+                  </span>
+                )}
               </div>
               <div className="text-sm text-gray-600">
                 Administración global · métricas · actividad · FinOps
@@ -2137,6 +2183,22 @@ export default function AdminPanel(props: AdminPanelProps) {
           </div>
         </div>
       </header>
+
+      {panelMessage && (
+        <div className="mx-auto max-w-7xl px-4 pt-4">
+          <div
+            className={`rounded-2xl border px-4 py-3 text-sm ${
+              panelMessage.type === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : panelMessage.type === "error"
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-amber-200 bg-amber-50 text-amber-800"
+            }`}
+          >
+            {panelMessage.message}
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="mx-auto max-w-7xl px-4 py-4">
@@ -2422,29 +2484,35 @@ export default function AdminPanel(props: AdminPanelProps) {
                   <>
                     <div>
                       <div className={labelBase}>Fecha emisión</div>
-                      <input className={inputBase} value={billingIssueDate} onChange={(e) => setBillingIssueDate(e.target.value)} placeholder="YYYY-MM-DD" />
+                      <input className={inputBase} value={billingIssuedAt} onChange={(e) => setBillingIssuedAt(e.target.value)} placeholder="YYYY-MM-DD" />
                     </div>
                     <div>
                       <div className={labelBase}>Fecha vencimiento</div>
-                      <input className={inputBase} value={billingDueDate} onChange={(e) => setBillingDueDate(e.target.value)} placeholder="YYYY-MM-DD" />
+                      <input className={inputBase} value={billingDueAt} onChange={(e) => setBillingDueAt(e.target.value)} placeholder="YYYY-MM-DD" />
                     </div>
                   </>
                 ) : (
                   <div className="md:col-span-2">
                     <div className={labelBase}>Fecha pago</div>
-                    <input className={inputBase} value={billingPaidDate} onChange={(e) => setBillingPaidDate(e.target.value)} placeholder="YYYY-MM-DD" />
+                    <input className={inputBase} value={billingPaidAt} onChange={(e) => setBillingPaidAt(e.target.value)} placeholder="YYYY-MM-DD" />
                   </div>
                 )}
 
                 <div>
-                  <div className={labelBase}>Nº factura / referencia</div>
-                  <input className={inputBase} value={billingInvoiceNumber} onChange={(e) => setBillingInvoiceNumber(e.target.value)} placeholder="opcional" />
+                  <div className={labelBase}>Referencia</div>
+                  <input className={inputBase} value={billingReference} onChange={(e) => setBillingReference(e.target.value)} placeholder="opcional" />
                 </div>
                 <div>
                   <div className={labelBase}>Nota</div>
                   <input className={inputBase} value={billingNote} onChange={(e) => setBillingNote(e.target.value)} placeholder="opcional" />
                 </div>
               </div>
+
+              {billingError && (
+                <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                  {billingError}
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
                 <button

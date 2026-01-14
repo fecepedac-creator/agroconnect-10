@@ -56,10 +56,7 @@ service cloud.firestore {
           || request.auth.token.role == "SUPERADMIN"
           || request.auth.token.role == "superadmin"
           || [
-            "fecepedac@gmail.com",
-            "fecepedac@hospitaldetalca.cl",
-            "fecepedac@hotmail.com",
-            "administracion@agroconnecto.cl"
+            "fecepedac@gmail.com"
           ].hasAny([request.auth.token.email])
           || myRole() == "superadmin"
           || userAccessRole() == "ADMIN"
@@ -155,6 +152,10 @@ service cloud.firestore {
     }
 
     match /audits/{auditId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /admin/{docId} {
       allow read, write: if isSuperAdmin();
     }
 
@@ -255,6 +256,23 @@ service cloud.firestore {
             allow delete: if isSuperAdmin();
           }
         }
+      }
+
+      /* ----- BILLING ----- */
+      match /billing_payments/{paymentId} {
+        allow read, write: if isSuperAdmin() || isMyCompany(companyId);
+        allow delete: if isSuperAdmin();
+      }
+
+      match /billing_invoices/{invoiceId} {
+        allow read, write: if isSuperAdmin() || isMyCompany(companyId);
+        allow delete: if isSuperAdmin();
+      }
+
+      /* ----- BROADCASTS ----- */
+      match /broadcasts/{broadcastId} {
+        allow read, write: if isSuperAdmin() || isMyCompany(companyId);
+        allow delete: if isSuperAdmin();
       }
     }
 

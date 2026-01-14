@@ -24,7 +24,7 @@ export const db: Firestore = getFirestore(app);
 export const auth: Auth = getAuth(app);
 
 // Cloud Functions (para aprovisionamiento seguro de roles/usuarios)
-export const functions: Functions = getFunctions(app);
+export const functions: Functions = getFunctions(app, "us-central1");
 
 /**
  * Sincroniza el acceso del usuario autenticado:

@@ -9,11 +9,12 @@ interface DashboardProps {
   jobs: JobOffer[];
   globalWorkers: Worker[];
   onRadarClick?: () => void;
+  demoMode?: boolean;
 }
 
 const COLORS = ['#059669', '#FBBF24', '#EF4444', '#3B82F6'];
 
-const Dashboard: React.FC<DashboardProps> = ({ workers, jobs, globalWorkers, onRadarClick }) => {
+const Dashboard: React.FC<DashboardProps> = ({ workers, jobs, globalWorkers, onRadarClick, demoMode = false }) => {
   const pending = workers.filter(w => w.status === WorkerStatus.PENDING).length;
   const consented = workers.filter(w => w.status === WorkerStatus.CONSENTED).length;
   const rejected = workers.filter(w => w.status === WorkerStatus.REJECTED).length;
@@ -32,11 +33,23 @@ const Dashboard: React.FC<DashboardProps> = ({ workers, jobs, globalWorkers, onR
   return (
     <div className="space-y-6 animate-fade-in w-full">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center">
-         <h2 className="text-2xl font-bold text-gray-800">Centro de Comando</h2>
+         <div className="flex items-center gap-3">
+           <h2 className="text-2xl font-bold text-gray-800">Centro de Comando</h2>
+           {demoMode && (
+             <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+               DEMO
+             </span>
+           )}
+         </div>
          <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full border border-gray-200">
            Última actualización: Ahora
          </span>
       </div>
+      {demoMode && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl">
+          Estás viendo datos simulados. Los módulos de Empresas, Facturación y Ajustes usan Firestore real.
+        </div>
+      )}
       
       {/* Top Widgets: Alerts & Recruitment */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
