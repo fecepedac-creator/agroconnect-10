@@ -20,6 +20,7 @@ const Workers: React.FC<WorkersProps> = ({ workers, setWorkers }) => {
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [isGeneratingMsg, setIsGeneratingMsg] = useState(false);
   const [msgContext, setMsgContext] = useState('');
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
   const handleImportMock = () => {
     setIsImporting(true);
@@ -30,7 +31,7 @@ const Workers: React.FC<WorkersProps> = ({ workers, setWorkers }) => {
       ];
       setWorkers(prev => [...prev, ...newWorkers]);
       setIsImporting(false);
-      alert('Datos importados correctamente desde Google Sheets');
+      setNotice({ type: 'success', message: 'Datos importados correctamente desde Google Sheets' });
     }, 1500);
   };
 
@@ -49,17 +50,32 @@ const Workers: React.FC<WorkersProps> = ({ workers, setWorkers }) => {
   };
 
   const handleGenerateMessage = async () => {
-    if (!msgContext) return alert("Describe el motivo del mensaje primero.");
+    if (!msgContext) {
+      setNotice({ type: 'error', message: 'Describe el motivo del mensaje primero.' });
+      return;
+    }
     setIsGeneratingMsg(true);
-    const text = await generateBroadcastMessage(msgContext);
-    setBroadcastMessage(text);
-    setIsGeneratingMsg(false);
+    try {
+      const text = await generateBroadcastMessage(msgContext);
+      setBroadcastMessage(text);
+      if (text.toLowerCase().includes("no se pudo")) {
+        setNotice({ type: 'error', message: text });
+      }
+    } finally {
+      setIsGeneratingMsg(false);
+    }
   };
 
   const handleSendBroadcast = () => {
-    if (!broadcastMessage) return alert("Escribe un mensaje.");
+    if (!broadcastMessage) {
+      setNotice({ type: 'error', message: 'Escribe un mensaje.' });
+      return;
+    }
     
-    alert(`Mensaje enviado a ${selectedWorkerIds.length} trabajadores.\n\nContenido:\n"${broadcastMessage}"\n\n(Simulación: Los trabajadores recibirán un WhatsApp con opciones SI/NO)`);
+    setNotice({
+      type: 'success',
+      message: `Mensaje enviado a ${selectedWorkerIds.length} trabajadores. (Simulación WhatsApp)`,
+    });
     
     // Reset
     setSelectedWorkerIds([]);
@@ -109,6 +125,20 @@ const Workers: React.FC<WorkersProps> = ({ workers, setWorkers }) => {
           Importar (Google Sheets)
         </button>
       </div>
+
+      {notice && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            notice.type === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : notice.type === 'error'
+                ? 'border-red-200 bg-red-50 text-red-700'
+                : 'border-amber-200 bg-amber-50 text-amber-800'
+          }`}
+        >
+          {notice.message}
+        </div>
+      )}
 
       <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
         {/* Filters Bar */}
