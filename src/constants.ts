@@ -65,7 +65,7 @@ export const DEMO_COMPANIES: Company[] = [
     name: 'Agrícola Los Andes', 
     subscriptionPlan: 'Pro', 
     status: 'active', 
-    visibility: 'public',
+    isPublic: true,
     contactEmail: 'contacto@losandes.cl',
     logoUrl: 'https://images.unsplash.com/photo-1595856552254-2070f807eb47?q=80&w=200&auto=format&fit=crop'
   },
@@ -74,7 +74,7 @@ export const DEMO_COMPANIES: Company[] = [
     name: 'Frutos del Valle S.A.', 
     subscriptionPlan: 'Enterprise', 
     status: 'active',
-    visibility: 'public',
+    isPublic: true,
     contactEmail: 'rrhh@frutosvalle.cl',
     logoUrl: 'https://images.unsplash.com/photo-1610832958506-aa56368176cf?q=80&w=200&auto=format&fit=crop'
   },
@@ -83,7 +83,7 @@ export const DEMO_COMPANIES: Company[] = [
     name: 'Exportadora Sol Naciente', 
     subscriptionPlan: 'Basic', 
     status: 'active',
-    visibility: 'public',
+    isPublic: true,
     contactEmail: 'finanzas@solnaciente.cl' 
   },
 ];

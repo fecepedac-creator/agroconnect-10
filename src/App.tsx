@@ -1,13 +1,15 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
   collection,
   doc,
   getDoc,
+  onSnapshot,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "./firebase";
 
 import {
   LayoutDashboard,
@@ -68,6 +70,7 @@ const App: React.FC = () => {
   const [globalWorkers, setGlobalWorkers] = useState<Worker[]>(
     (ENHANCED_DEMO_GLOBAL as any) || ENHANCED_DEMO_WORKERS || MOCK_GLOBAL_WORKERS
   );
+  const [companyStats, setCompanyStats] = useState<Record<string, any> | null>(null);
 
   const [adminConfig, setAdminConfig] = useState<AdminConfig>({
     whatsappNumber: "+56900000000",
@@ -80,6 +83,14 @@ const App: React.FC = () => {
 
   const handleRadarClick = () => setCurrentView(AppView.GLOBAL_SEARCH);
   const isDemoMode = Boolean(adminConfig.demoMode);
+  const SUPERADMIN_EMAILS = useMemo(
+    () =>
+      String((import.meta as any)?.env?.VITE_SUPERADMIN_EMAILS ?? "fecepedac@gmail.com")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    []
+  );
 
   const handleRoleSelect = (role: UserRole, companyData?: Company) => {
     setUserRole(role);
@@ -189,6 +200,34 @@ const App: React.FC = () => {
     };
     loadAdminConfig();
   }, []);
+
+  useEffect(() => {
+    if (!currentCompany?.id) {
+      setCompanyStats(null);
+      return;
+    }
+    const ref = doc(db, "stats_companies", currentCompany.id);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setCompanyStats((snap.data() as any) || null),
+      () => setCompanyStats(null)
+    );
+    return () => unsub();
+  }, [currentCompany?.id]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (!user?.email) return;
+      const email = user.email.trim().toLowerCase();
+      if (SUPERADMIN_EMAILS.includes(email)) {
+        setUserRole(UserRole.ADMIN);
+        setCurrentCompany(null);
+        setAdminTab("OVERVIEW");
+        setCurrentView(AppView.ADMIN);
+      }
+    });
+    return () => unsub();
+  }, [SUPERADMIN_EMAILS]);
 
   const handleAdminConfigSave = async (config: AdminConfig) => {
     setAdminConfig(config);
@@ -332,6 +371,7 @@ const App: React.FC = () => {
               globalWorkers={globalWorkers}
               onRadarClick={handleRadarClick}
               demoMode={isDemoMode}
+              companyStats={companyStats}
             />
           )}
           {currentView === AppView.WORKERS && <Workers workers={workers} setWorkers={setWorkers} />}

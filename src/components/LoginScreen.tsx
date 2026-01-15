@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { GoogleAuthProvider, getRedirectResult, signInWithRedirect, signOut } from "firebase/auth";
-import { auth } from "../firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db, syncUserAccess } from "../firebase";
 import { completeCompanyLogin, startCompanyLogin } from "../services/authCompany";
 import { UserRole, type Company, type Lead } from "../types";
 
@@ -228,10 +229,27 @@ export default function LoginScreen({
         if (intent.role === "companyAdmin") {
           const user = await completeCompanyLogin();
           if (!user) return;
-          const company = companies.find((c) => c.id === intent.companyId);
-          if (!company) {
-            setError("No se encontró la empresa seleccionada. Intenta nuevamente.");
+          const access = await syncUserAccess();
+          if (!access?.companyId || access?.role !== "company_admin") {
+            setError("Tu usuario no tiene permisos de empresa. Verifica tu correo administrador.");
             return;
+          }
+          const resolvedCompanyId = access.companyId;
+          let company = companies.find((c) => c.id === resolvedCompanyId);
+          if (!company) {
+            const snap = await getDoc(doc(db, "companies", resolvedCompanyId));
+            if (!snap.exists()) {
+              setError("No se encontró la empresa seleccionada. Intenta nuevamente.");
+              return;
+            }
+            const data = snap.data() as Company;
+            company = {
+              id: snap.id,
+              name: data?.name || "Empresa",
+              subscriptionPlan: data?.subscriptionPlan || "Basic",
+              contactEmail: data?.contactEmail || data?.adminEmail || "",
+              ...data,
+            };
           }
           onSelectRole(UserRole.COMPANY, company);
           setOpenCompanies(false);
