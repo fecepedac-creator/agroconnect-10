@@ -60,6 +60,8 @@ export type CompanyDoc = {
   billingEmail?: string | null;
   legalName?: string | null;
   tags?: string[];
+  isPublic?: boolean;
+  public?: boolean;
 
   contactEmail?: string | null;
   phone?: string | null;
@@ -490,6 +492,7 @@ export default function AdminPanel(props: AdminPanelProps) {
   const [adminEmail, setAdminEmail] = useState("");
   const [plan, setPlan] = useState<SubscriptionPlan>("Basic");
   const [status, setStatus] = useState<CompanyStatus>("Active");
+  const [isPublic, setIsPublic] = useState(true);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setMe(u));
@@ -968,6 +971,7 @@ export default function AdminPanel(props: AdminPanelProps) {
     setAdminEmail("");
     setPlan("Basic");
     setStatus("Active");
+    setIsPublic(true);
   }
 
   function openCreateModal() {
@@ -1015,6 +1019,7 @@ export default function AdminPanel(props: AdminPanelProps) {
     setAdminEmail(data.adminEmail || "");
     setPlan((data.subscriptionPlan || "Basic") as SubscriptionPlan);
     setStatus((data.status || "Active") as CompanyStatus);
+    setIsPublic(Boolean(data.isPublic ?? data.public ?? false));
 
     setModalOpen(true);
   }
@@ -1069,6 +1074,8 @@ export default function AdminPanel(props: AdminPanelProps) {
             adminEmail: adminEmail.trim(),
             subscriptionPlan: plan,
             status,
+            isPublic,
+            public: isPublic,
 
             createdBy,
             createdAt: serverTimestamp(),
@@ -1110,6 +1117,8 @@ export default function AdminPanel(props: AdminPanelProps) {
             adminEmail: adminEmail.trim(),
             subscriptionPlan: plan,
             status,
+            isPublic,
+            public: isPublic,
 
             updatedAt: serverTimestamp(),
           })
@@ -1685,6 +1694,12 @@ export default function AdminPanel(props: AdminPanelProps) {
                     <div className={labelBase}>Ubicación</div>
                     <div className="text-sm text-gray-800">
                       {[selectedCompanyDoc.address?.city, selectedCompanyDoc.address?.region].filter(Boolean).join(", ") || "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className={labelBase}>Directorio público</div>
+                    <div className="text-sm text-gray-800">
+                      {selectedCompanyDoc.isPublic ?? selectedCompanyDoc.public ? "Sí" : "No"}
                     </div>
                   </div>
                 </div>
@@ -2427,6 +2442,22 @@ export default function AdminPanel(props: AdminPanelProps) {
                     <option value="Suspended">Suspended</option>
                     <option value="Overdue">Morosa</option>
                   </select>
+                </div>
+
+                <div className="md:col-span-2">
+                  <div className={labelBase}>DIRECTORIO PÚBLICO</div>
+                  <label className="mt-2 inline-flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={isPublic}
+                      onChange={(e) => setIsPublic(e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    Publicar esta empresa en el directorio público.
+                  </label>
+                  <div className={helpBase}>
+                    Si está activo, la empresa aparecerá en la vista pública (tarjetas).
+                  </div>
                 </div>
               </div>
 
