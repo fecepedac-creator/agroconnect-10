@@ -10,25 +10,45 @@ interface DashboardProps {
   globalWorkers: Worker[];
   onRadarClick?: () => void;
   demoMode?: boolean;
+  companyStats?: {
+    jobsTotal?: number;
+    jobsActive?: number;
+    jobsFuture?: number;
+    jobsClosed?: number;
+    applicationsTotal?: number;
+    hiresTotal?: number;
+    workersTotal?: number;
+    workersActive?: number;
+  } | null;
 }
 
 const COLORS = ['#059669', '#FBBF24', '#EF4444', '#3B82F6'];
 
-const Dashboard: React.FC<DashboardProps> = ({ workers, jobs, globalWorkers, onRadarClick, demoMode = false }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+  workers,
+  jobs,
+  globalWorkers,
+  onRadarClick,
+  demoMode = false,
+  companyStats = null,
+}) => {
   const pending = workers.filter(w => w.status === WorkerStatus.PENDING).length;
   const consented = workers.filter(w => w.status === WorkerStatus.CONSENTED).length;
   const rejected = workers.filter(w => w.status === WorkerStatus.REJECTED).length;
   const active = workers.filter(w => w.status === WorkerStatus.ACTIVE).length;
+  const workersTotal = companyStats?.workersTotal ?? workers.length;
+  const workersActive = companyStats?.workersActive ?? active;
 
   const statusData = [
     { name: 'Consentido', value: consented },
     { name: 'Pendiente', value: pending },
     { name: 'Rechazado', value: rejected },
-    { name: 'Activo', value: active },
+    { name: 'Activo', value: workersActive },
   ];
 
   const totalWorkersNeeded = jobs.reduce((acc, job) => acc + job.workersNeeded, 0);
   const totalWorkersFilled = jobs.reduce((acc, job) => acc + job.workersFilled, 0);
+  const activeJobsCount = companyStats?.jobsActive ?? jobs.filter(j => j.isActive).length;
 
   return (
     <div className="space-y-6 animate-fade-in w-full">
@@ -166,7 +186,7 @@ const Dashboard: React.FC<DashboardProps> = ({ workers, jobs, globalWorkers, onR
           </div>
           <div>
             <p className="text-sm text-gray-500">Total Trabajadores</p>
-            <p className="text-2xl font-bold text-gray-800">{workers.length}</p>
+            <p className="text-2xl font-bold text-gray-800">{workersTotal}</p>
           </div>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center">
@@ -176,7 +196,7 @@ const Dashboard: React.FC<DashboardProps> = ({ workers, jobs, globalWorkers, onR
           <div>
             <p className="text-sm text-gray-500">Consentimiento</p>
             <p className="text-2xl font-bold text-gray-800">
-              {workers.length > 0 ? Math.round(((consented + active) / workers.length) * 100) : 0}%
+              {workersTotal > 0 ? Math.round(((consented + active) / workersTotal) * 100) : 0}%
             </p>
           </div>
         </div>
@@ -186,7 +206,7 @@ const Dashboard: React.FC<DashboardProps> = ({ workers, jobs, globalWorkers, onR
           </div>
           <div>
             <p className="text-sm text-gray-500">Ofertas Activas</p>
-            <p className="text-2xl font-bold text-gray-800">{jobs.filter(j => j.isActive).length}</p>
+            <p className="text-2xl font-bold text-gray-800">{activeJobsCount}</p>
           </div>
         </div>
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center">
@@ -195,7 +215,7 @@ const Dashboard: React.FC<DashboardProps> = ({ workers, jobs, globalWorkers, onR
           </div>
           <div>
             <p className="text-sm text-gray-500">En Faena</p>
-            <p className="text-2xl font-bold text-gray-800">{active}</p>
+            <p className="text-2xl font-bold text-gray-800">{workersActive}</p>
           </div>
         </div>
       </div>

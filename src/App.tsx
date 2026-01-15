@@ -4,6 +4,7 @@ import {
   collection,
   doc,
   getDoc,
+  onSnapshot,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -69,6 +70,7 @@ const App: React.FC = () => {
   const [globalWorkers, setGlobalWorkers] = useState<Worker[]>(
     (ENHANCED_DEMO_GLOBAL as any) || ENHANCED_DEMO_WORKERS || MOCK_GLOBAL_WORKERS
   );
+  const [companyStats, setCompanyStats] = useState<Record<string, any> | null>(null);
 
   const [adminConfig, setAdminConfig] = useState<AdminConfig>({
     whatsappNumber: "+56900000000",
@@ -198,6 +200,20 @@ const App: React.FC = () => {
     };
     loadAdminConfig();
   }, []);
+
+  useEffect(() => {
+    if (!currentCompany?.id) {
+      setCompanyStats(null);
+      return;
+    }
+    const ref = doc(db, "stats_companies", currentCompany.id);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setCompanyStats((snap.data() as any) || null),
+      () => setCompanyStats(null)
+    );
+    return () => unsub();
+  }, [currentCompany?.id]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -355,6 +371,7 @@ const App: React.FC = () => {
               globalWorkers={globalWorkers}
               onRadarClick={handleRadarClick}
               demoMode={isDemoMode}
+              companyStats={companyStats}
             />
           )}
           {currentView === AppView.WORKERS && <Workers workers={workers} setWorkers={setWorkers} />}
