@@ -61,7 +61,6 @@ export type CompanyDoc = {
   legalName?: string | null;
   tags?: string[];
   isPublic?: boolean;
-  public?: boolean;
 
   contactEmail?: string | null;
   phone?: string | null;
@@ -1019,7 +1018,7 @@ export default function AdminPanel(props: AdminPanelProps) {
     setAdminEmail(data.adminEmail || "");
     setPlan((data.subscriptionPlan || "Basic") as SubscriptionPlan);
     setStatus((data.status || "Active") as CompanyStatus);
-    setIsPublic(Boolean(data.isPublic ?? data.public ?? false));
+    setIsPublic(Boolean(data.isPublic ?? false));
 
     setModalOpen(true);
   }
@@ -1075,7 +1074,6 @@ export default function AdminPanel(props: AdminPanelProps) {
             subscriptionPlan: plan,
             status,
             isPublic,
-            public: isPublic,
 
             createdBy,
             createdAt: serverTimestamp(),
@@ -1118,7 +1116,6 @@ export default function AdminPanel(props: AdminPanelProps) {
             subscriptionPlan: plan,
             status,
             isPublic,
-            public: isPublic,
 
             updatedAt: serverTimestamp(),
           })
@@ -1699,7 +1696,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                   <div>
                     <div className={labelBase}>Directorio público</div>
                     <div className="text-sm text-gray-800">
-                      {selectedCompanyDoc.isPublic ?? selectedCompanyDoc.public ? "Sí" : "No"}
+                      {selectedCompanyDoc.isPublic ? "Sí" : "No"}
                     </div>
                   </div>
                 </div>
