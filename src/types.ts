@@ -103,7 +103,7 @@ export interface Company {
     | 'inactive'
     | 'pending'
     | 'suspended';
-  visibility?: 'public' | 'private';
+  isPublic?: boolean;
   contactEmail: string;
   logoUrl?: string;
   rut?: string;

@@ -12,7 +12,7 @@ type GetCompaniesOptions = {
 
 export async function getCompanies({ demoMode, demoCompanies = [] }: GetCompaniesOptions): Promise<Company[]> {
   if (demoMode) {
-    return demoCompanies;
+    return demoCompanies.filter((company) => company.isPublic);
   }
 
   const baseRef = collection(db, "companies");

@@ -1918,7 +1918,7 @@ export default function AdminPanel(props: AdminPanelProps) {
         region: lead.region || null,
         subscriptionPlan: "Basic",
         status: "active",
-        visibility: "private",
+        isPublic: false,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         createdBy: {
