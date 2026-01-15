@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { GoogleAuthProvider, getRedirectResult, signInWithRedirect, signOut } from "firebase/auth";
-import { auth } from "../firebase";
+import { auth, syncUserAccess } from "../firebase";
 import { completeCompanyLogin, startCompanyLogin } from "../services/authCompany";
 import { UserRole, type Company, type Lead } from "../types";
 
@@ -228,7 +228,9 @@ export default function LoginScreen({
         if (intent.role === "companyAdmin") {
           const user = await completeCompanyLogin();
           if (!user) return;
-          const company = companies.find((c) => c.id === intent.companyId);
+          const access = await syncUserAccess();
+          const resolvedCompanyId = access?.companyId || intent.companyId;
+          const company = companies.find((c) => c.id === resolvedCompanyId);
           if (!company) {
             setError("No se encontró la empresa seleccionada. Intenta nuevamente.");
             return;

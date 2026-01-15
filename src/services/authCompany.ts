@@ -18,7 +18,6 @@ export async function completeCompanyLogin() {
 
   const base = {
     uid,
-    role: "company",
     email: user.email || null,
     displayName: user.displayName || null,
     phoneNumber: user.phoneNumber || null,
