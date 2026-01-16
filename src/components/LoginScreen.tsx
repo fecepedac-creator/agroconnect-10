@@ -187,6 +187,7 @@ export default function LoginScreen({
     setError(null);
     setLoading("admin");
     try {
+      localStorage.setItem("adminIntent", "1");
       const provider = new GoogleAuthProvider();
       sessionStorage.setItem(LOGIN_INTENT_KEY, JSON.stringify({ role: "admin" }));
       await signInWithRedirect(auth, provider);
