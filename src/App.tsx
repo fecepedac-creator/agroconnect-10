@@ -195,12 +195,6 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!path.startsWith("/admin")) {
-      localStorage.removeItem("adminIntent");
-    }
-  }, [path]);
-
-  useEffect(() => {
     const loadAdminConfig = async () => {
       try {
         const snap = await getDoc(doc(db, "admin", "config"));
@@ -259,6 +253,14 @@ const App: React.FC = () => {
   }, [path, userRole]);
 
   const isAllowlisted = authUserEmail ? SUPERADMIN_EMAILS.includes(authUserEmail) : false;
+
+  if (path.startsWith("/admin") && !authReady) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="text-sm text-gray-500">Cargando acceso...</div>
+      </div>
+    );
+  }
 
   if (path.startsWith("/admin") && authReady && !isAllowlisted) {
     return (
