@@ -79,6 +79,7 @@ export interface JobOffer {
   isActive: boolean;
   qrCodeUrl?: string;
   jobStatus?: 'future' | 'active' | 'closed';
+  publishPublic?: boolean;
   // Enhanced Fields
   category?: 'Cosecha' | 'Packing' | 'Poda' | 'Maquinaria' | 'Otros';
   paymentType?: 'Al Día' | 'Semanal' | 'Quincenal' | 'Por Kilo';

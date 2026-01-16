@@ -82,6 +82,7 @@ export default function PublishOffer({
   const [startDate, setStartDate] = useState("");
   const [duration, setDuration] = useState("");
   const [workersNeeded, setWorkersNeeded] = useState<number>(8);
+  const [publishPublic, setPublishPublic] = useState(false);
 
   // Aptitudes (chips)
   const [skillsInput, setSkillsInput] = useState("");
@@ -175,6 +176,7 @@ export default function PublishOffer({
       skillsRequired,
       aiSeedNotes: aiSeedNotes?.trim() || undefined,
       aiGeneratedText: aiGeneratedText?.trim() || undefined,
+      publishPublic,
       // Sin geocoding en frontend en esta etapa (evita cálculos/queries)
       coordinates: { lat: -35.426, lng: -71.666 },
     } as any;
@@ -419,6 +421,21 @@ export default function PublishOffer({
                     value={startDate}
                     onChange={(e) => setStartDate(e.target.value)}
                     className="w-full bg-transparent text-sm font-semibold text-gray-900 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="md:col-span-2">
+                <div className="mt-1 flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-3">
+                  <div>
+                    <div className="text-xs font-extrabold text-gray-500">Publicar en directorio público</div>
+                    <div className="text-[11px] text-gray-500">La oferta será visible para trabajadores sin iniciar sesión.</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={publishPublic}
+                    onChange={(e) => setPublishPublic(e.target.checked)}
+                    className="h-5 w-5 accent-emerald-600"
                   />
                 </div>
               </div>

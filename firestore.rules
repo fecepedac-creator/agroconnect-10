@@ -44,7 +44,6 @@ service cloud.firestore {
           || request.auth.token.role == "admin"
           || request.auth.token.role == "SUPERADMIN"
           || request.auth.token.role == "superadmin"
-          || myRole() == "superadmin"
         );
     }
 
@@ -61,6 +60,11 @@ service cloud.firestore {
       return signedIn() && myUser().data.companyId != null
         ? myUser().data.companyId
         : null;
+    }
+
+    function userUpdateKeepsRoleAndCompany() {
+      return request.resource.data.role == resource.data.role
+        && request.resource.data.companyId == resource.data.companyId;
     }
 
     function isMyCompany(companyId) {
@@ -97,7 +101,9 @@ service cloud.firestore {
         && request.resource.data.role == "worker"
         && request.resource.data.email is string
         && request.resource.data.email.size() > 0;
-      allow update: if signedIn() && uid == myUid();
+      allow update: if signedIn()
+        && uid == myUid()
+        && userUpdateKeepsRoleAndCompany();
       allow delete: if isSuperAdmin();
     }
 
@@ -154,7 +160,9 @@ service cloud.firestore {
         && request.resource.data.role == "worker"
         && request.resource.data.email is string
         && request.resource.data.email.size() > 0;
-      allow update: if signedIn() && uid == myUid();
+      allow update: if signedIn()
+        && uid == myUid()
+        && userUpdateKeepsRoleAndCompany();
       allow delete: if false;
 
       match /applications/{appId} {
