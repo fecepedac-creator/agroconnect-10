@@ -160,7 +160,7 @@ const App: React.FC = () => {
     setCompaniesError(null);
     try {
       const list = await getCompanies({
-        demoMode: false,
+        demoMode: isDemoMode,
         demoCompanies: DEMO_COMPANIES,
       });
       setCompanies(list);
@@ -178,7 +178,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     void loadCompanies();
-  }, []);
+  }, [isDemoMode]);
 
   useEffect(() => {
     const handlePop = () => setPath(window.location.pathname);
@@ -239,7 +239,7 @@ const App: React.FC = () => {
         setCurrentCompany(null);
         setAdminTab("OVERVIEW");
         setCurrentView(AppView.ADMIN);
-      } else if (!isSuperAdmin && hasAdminIntent) {
+      } else if (!hasAdminClaim && localStorage.getItem("adminIntent")) {
         localStorage.removeItem("adminIntent");
       }
     });

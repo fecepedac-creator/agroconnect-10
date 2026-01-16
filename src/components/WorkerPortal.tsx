@@ -511,19 +511,31 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
 
     const applicationId = `${selectedJob.companyId}_${selectedJob.id}`;
     const applicationRef = doc(db, "workers", authUser.uid, "applications", applicationId);
-
-    await setDoc(
-      applicationRef,
-      {
-        jobId: selectedJob.id,
-        companyId: selectedJob.companyId,
-        jobTitle: selectedJob.title,
-        companyName: selectedJob.companyName ?? "",
-        appliedAt: serverTimestamp(),
-        status: "postulado",
-      },
-      { merge: true }
+    const companyApplicationRef = doc(
+      db,
+      "companies",
+      selectedJob.companyId,
+      "jobs",
+      selectedJob.id,
+      "applications",
+      applicationId
     );
+
+    const payload = {
+      jobId: selectedJob.id,
+      companyId: selectedJob.companyId,
+      jobTitle: selectedJob.title,
+      companyName: selectedJob.companyName ?? "",
+      workerId: authUser.uid,
+      appliedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      status: "postulado",
+    };
+
+    await Promise.all([
+      setDoc(applicationRef, payload, { merge: true }),
+      setDoc(companyApplicationRef, payload, { merge: true }),
+    ]);
   };
 
   const handleLogout = async () => {

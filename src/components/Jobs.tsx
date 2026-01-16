@@ -56,6 +56,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
     benefits: { transport: false, lunch: false },
     transportInfo: '',
     otherBenefits: '',
+    publishPublic: false,
     lat: -34.985, 
     lng: -71.239
   });
@@ -199,6 +200,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
         benefits: newJob.benefits,
         transportInfo: newJob.transportInfo,
         otherBenefits: newJob.otherBenefits,
+        publishPublic: Boolean(newJob.publishPublic),
         createdAt: serverTimestamp(),
       };
 
@@ -218,6 +220,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
         benefits: { transport: false, lunch: false },
         transportInfo: '',
         otherBenefits: '',
+        publishPublic: false,
         lat: -34.985,
         lng: -71.239,
       });
@@ -336,6 +339,21 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
               <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 space-y-2">
                 <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-2"><ShieldCheck size={16}/> Kit de Trabajo (Bloqueador, Guantes, etc.)</label>
                 <input type="text" className="w-full bg-white border-2 border-emerald-100 rounded-xl p-3 text-sm font-bold outline-none" placeholder="Ej: Gorro, bloqueador y guantes incluidos." value={newJob.otherBenefits} onChange={e => setNewJob({...newJob, otherBenefits: e.target.value})} />
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-gray-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-black text-gray-700 uppercase tracking-widest">Publicar en directorio público</div>
+                    <div className="text-[11px] text-gray-500">Visible para trabajadores sin iniciar sesión.</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(newJob.publishPublic)}
+                    onChange={(e) => setNewJob({ ...newJob, publishPublic: e.target.checked })}
+                    className="w-5 h-5 accent-emerald-600 cursor-pointer"
+                  />
+                </div>
               </div>
             </div>
 
