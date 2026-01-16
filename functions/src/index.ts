@@ -3,6 +3,7 @@ import {
   onDocumentCreated,
   onDocumentUpdated,
 } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { defineSecret } from "firebase-functions/params";
 import nodemailer from "nodemailer";
 
@@ -22,14 +23,12 @@ const DEFAULT_FROM_NAME = "AgroConnect";
 const SUPERADMIN_EMAILS = ["fecepedac@gmail.com"];
 
 function isSuperAdminToken(token: any): boolean {
-  const email = String(token?.email || "").toLowerCase();
   const role = String(token?.role || "").toLowerCase();
   return (
     token?.admin === true ||
     token?.superadmin === true ||
     role === "admin" ||
-    role === "superadmin" ||
-    SUPERADMIN_EMAILS.includes(email)
+    role === "superadmin"
   );
 }
 
@@ -151,6 +150,42 @@ export const syncUserAccess = onCall(async (request) => {
   await userRef.set(payload, { merge: true });
 
   return { ok: true, role, companyId };
+});
+
+/**
+ * =========================
+ *  SUPERADMIN CLAIMS (Callable)
+ * =========================
+ * Setea claims admin/superadmin si el email está en allowlist server-side.
+ */
+export const syncSuperadminClaims = onCall(async (request) => {
+  const user = await assertAuthenticated(request);
+  const email = String(user.token.email || "").toLowerCase();
+  if (!SUPERADMIN_EMAILS.includes(email)) {
+    throw new HttpsError("permission-denied", "No tienes permisos de SuperAdmin.");
+  }
+
+  const auth = admin.auth();
+  const current = await auth.getUser(user.uid);
+  const existingClaims = current.customClaims || {};
+  const nextClaims = {
+    ...existingClaims,
+    admin: true,
+    superadmin: true,
+    role: "superadmin",
+  };
+
+  await auth.setCustomUserClaims(user.uid, nextClaims);
+  await db.collection("users").doc(user.uid).set(
+    {
+      role: "superadmin",
+      email,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return { ok: true };
 });
 
 /**
@@ -311,6 +346,81 @@ export const onJobCreated = onDocumentCreated("companies/{companyId}/jobs/{jobId
 });
 
 /**
+ * Public jobs sync
+ * - Mirrors publishable active jobs into publicJobs/{companyId}_{jobId}
+ * - When job is closed or unpublishes, marks public job as closed
+ */
+async function upsertPublicJob(companyId: string, jobId: string, data: any) {
+  const publicRef = db.collection("publicJobs").doc(`${companyId}_${jobId}`);
+  let companyName = String(data?.companyName || "").trim();
+
+  if (!companyName) {
+    try {
+      const companySnap = await db.collection("companies").doc(companyId).get();
+      if (companySnap.exists) {
+        companyName = String(companySnap.data()?.name || "").trim();
+      }
+    } catch (e) {
+      console.error("publicJobs: failed to fetch company name", e);
+    }
+  }
+
+  const payload = {
+    companyId,
+    jobId,
+    companyName: companyName || null,
+    title: String(data?.title || ""),
+    description: String(data?.description || ""),
+    workersNeeded: data?.workersNeeded ?? null,
+    workersFilled: data?.workersFilled ?? null,
+    startDate: data?.startDate ?? null,
+    location: data?.location ?? "",
+    coordinates: data?.coordinates ?? null,
+    category: data?.category ?? null,
+    paymentType: data?.paymentType ?? null,
+    payMode: data?.payMode ?? null,
+    payAmount: data?.payAmount ?? null,
+    payDetail: data?.payDetail ?? null,
+    skillsRequired: data?.skillsRequired ?? null,
+    benefits: data?.benefits ?? null,
+    transportInfo: data?.transportInfo ?? null,
+    otherBenefits: data?.otherBenefits ?? null,
+    jobStatus: data?.jobStatus ?? "active",
+    isActive: data?.isActive ?? true,
+    publishedAt: data?.publishedAt ?? null,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await publicRef.set(payload, { merge: true });
+}
+
+async function closePublicJob(companyId: string, jobId: string) {
+  const publicRef = db.collection("publicJobs").doc(`${companyId}_${jobId}`);
+  await publicRef.set(
+    {
+      jobStatus: "closed",
+      isActive: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+export const onJobPublicSyncCreated = onDocumentCreated(
+  "companies/{companyId}/jobs/{jobId}",
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() as any;
+    const { companyId, jobId } = event.params;
+
+    if (data?.publishPublic === true && String(data?.jobStatus || "") === "active") {
+      await upsertPublicJob(companyId, jobId, data);
+    }
+  }
+);
+
+/**
  * Jobs status updated (future/active/closed)
  */
 export const onJobUpdated = onDocumentUpdated("companies/{companyId}/jobs/{jobId}", async (event) => {
@@ -338,6 +448,28 @@ export const onJobUpdated = onDocumentUpdated("companies/{companyId}/jobs/{jobId
   await incGlobal(fieldsGlobal);
   await incCompany(companyId, fieldsCompany);
 });
+
+export const onJobPublicSyncUpdated = onDocumentUpdated(
+  "companies/{companyId}/jobs/{jobId}",
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!after) return;
+
+    const { companyId, jobId } = event.params;
+    const publishPublic = after?.publishPublic === true;
+    const status = String(after?.jobStatus || "");
+
+    if (publishPublic && status === "active") {
+      await upsertPublicJob(companyId, jobId, after);
+      return;
+    }
+
+    if (before?.publishPublic === true || before?.jobStatus === "active") {
+      await closePublicJob(companyId, jobId);
+    }
+  }
+);
 
 /**
  * Applications created (per job)
@@ -915,3 +1047,32 @@ export const sendEmailFromOutbox = onDocumentCreated(
     }
   }
 );
+
+/**
+ * =========================
+ *  COMMS OUTBOX WATCHDOG
+ * =========================
+ * Marca como error los mensajes en "sending" que quedaron colgados.
+ */
+export const commsOutboxWatchdog = onSchedule("every 10 minutes", async () => {
+  const cutoffMs = Date.now() - 15 * 60 * 1000;
+  const cutoff = admin.firestore.Timestamp.fromMillis(cutoffMs);
+  const snap = await db
+    .collection("comms_outbox")
+    .where("status", "==", "sending")
+    .where("sendingAt", "<", cutoff)
+    .limit(50)
+    .get();
+
+  if (snap.empty) return;
+
+  const batch = db.batch();
+  snap.docs.forEach((docSnap) => {
+    batch.update(docSnap.ref, {
+      status: "error",
+      error: "watchdog_timeout",
+      failedAt: FieldValue.serverTimestamp(),
+    });
+  });
+  await batch.commit();
+});

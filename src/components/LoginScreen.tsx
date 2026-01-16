@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { GoogleAuthProvider, getRedirectResult, signInWithRedirect, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
-import { auth, db, syncUserAccess } from "../firebase";
+import { auth, db, syncSuperadminClaims, syncUserAccess } from "../firebase";
 import { completeCompanyLogin, startCompanyLogin } from "../services/authCompany";
 import { UserRole, type Company, type Lead } from "../types";
 
@@ -52,14 +52,6 @@ export default function LoginScreen({
   const bgRight = "/bg-right.jpg";
 
   // Allowlist de superadmins por email (rápido para empezar)
-  const SUPERADMIN_EMAILS = useMemo(() => {
-    const raw = (import.meta as any)?.env?.VITE_SUPERADMIN_EMAILS ?? "fecepedac@gmail.com";
-    return String(raw)
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean);
-  }, []);
-
   const centerLogo = useMemo(() => {
     return (
       <div className="flex flex-col items-center justify-center text-center px-6">
@@ -187,6 +179,8 @@ export default function LoginScreen({
     setError(null);
     setLoading("admin");
     try {
+      window.history.pushState({}, "", "/admin");
+      window.dispatchEvent(new PopStateEvent("popstate"));
       const provider = new GoogleAuthProvider();
       sessionStorage.setItem(LOGIN_INTENT_KEY, JSON.stringify({ role: "admin" }));
       await signInWithRedirect(auth, provider);
@@ -213,12 +207,23 @@ export default function LoginScreen({
             setError("Tu cuenta Google no tiene email disponible. Intenta con otra cuenta.");
             return;
           }
-          if (SUPERADMIN_EMAILS.length === 0) {
+          try {
+            await syncSuperadminClaims();
+          } catch (e: any) {
             await signOut(auth);
-            setError("SuperAdmin no configurado. Define VITE_SUPERADMIN_EMAILS en .env (emails separados por coma).");
+            setError(e?.message || "No tienes permisos de SuperAdmin para esta app.");
             return;
           }
-          if (!SUPERADMIN_EMAILS.includes(email)) {
+
+          const token = await cred.user.getIdTokenResult(true);
+          const role = String(token?.claims?.role || "").toLowerCase();
+          const isAdmin =
+            token?.claims?.admin === true ||
+            token?.claims?.superadmin === true ||
+            role === "admin" ||
+            role === "superadmin";
+
+          if (!isAdmin) {
             await signOut(auth);
             setError("No tienes permisos de SuperAdmin para esta app.");
             return;
@@ -262,7 +267,7 @@ export default function LoginScreen({
     };
 
     void consumeRedirect();
-  }, [companies, onSelectRole, SUPERADMIN_EMAILS]);
+  }, [companies, onSelectRole]);
 
   // Atenuación de paneles según hover
   const leftDim = hoverSide === "company";
