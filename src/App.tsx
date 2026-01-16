@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   addDoc,
   collection,
@@ -59,6 +59,7 @@ const App: React.FC = () => {
   const [path, setPath] = useState(window.location.pathname);
   const [authReady, setAuthReady] = useState(false);
   const [authUserEmail, setAuthUserEmail] = useState<string | null>(null);
+  const [isAdminClaim, setIsAdminClaim] = useState(false);
 
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
 
@@ -86,15 +87,6 @@ const App: React.FC = () => {
 
   const handleRadarClick = () => setCurrentView(AppView.GLOBAL_SEARCH);
   const isDemoMode = Boolean(adminConfig.demoMode);
-  const SUPERADMIN_EMAILS = useMemo(
-    () =>
-      String((import.meta as any)?.env?.VITE_SUPERADMIN_EMAILS ?? "fecepedac@gmail.com")
-        .split(",")
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean),
-    []
-  );
-
   const handleRoleSelect = (role: UserRole, companyData?: Company) => {
     setUserRole(role);
 
@@ -226,13 +218,23 @@ const App: React.FC = () => {
   }, [currentCompany?.id]);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
       const email = user?.email?.trim().toLowerCase() || null;
       setAuthUserEmail(email);
       setAuthReady(true);
-      if (!email) return;
-      const isSuperAdmin = SUPERADMIN_EMAILS.includes(email);
-      if (isSuperAdmin && path.startsWith("/admin")) {
+      setIsAdminClaim(false);
+      if (!user) return;
+
+      const token = await user.getIdTokenResult();
+      const role = String(token?.claims?.role || "").toLowerCase();
+      const hasAdminClaim =
+        token?.claims?.admin === true ||
+        token?.claims?.superadmin === true ||
+        role === "admin" ||
+        role === "superadmin";
+      setIsAdminClaim(hasAdminClaim);
+
+      if (hasAdminClaim && path.startsWith("/admin")) {
         setUserRole(UserRole.ADMIN);
         setCurrentCompany(null);
         setAdminTab("OVERVIEW");
@@ -242,7 +244,7 @@ const App: React.FC = () => {
       }
     });
     return () => unsub();
-  }, [SUPERADMIN_EMAILS, path]);
+  }, [path]);
 
   useEffect(() => {
     if (!path.startsWith("/admin") && userRole === UserRole.ADMIN) {
@@ -252,7 +254,7 @@ const App: React.FC = () => {
     }
   }, [path, userRole]);
 
-  const isAllowlisted = authUserEmail ? SUPERADMIN_EMAILS.includes(authUserEmail) : false;
+  const isAllowlisted = authUserEmail ? isAdminClaim : false;
 
   if (path.startsWith("/admin") && !authReady) {
     return (
@@ -262,7 +264,22 @@ const App: React.FC = () => {
     );
   }
 
-  if (path.startsWith("/admin") && authReady && !isAllowlisted) {
+  if (path.startsWith("/admin") && authReady && authUserEmail == null) {
+    return (
+      <div className="min-h-screen bg-gray-50 font-sans">
+        <LoginScreen
+          companies={companies}
+          companiesLoading={companiesLoading}
+          companiesError={companiesError}
+          onRetryCompanies={loadCompanies}
+          onSelectRole={handleRoleSelect}
+          onRegisterLead={handleRegisterLead}
+        />
+      </div>
+    );
+  }
+
+  if (path.startsWith("/admin") && authReady && authUserEmail != null && !isAllowlisted) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm max-w-md w-full">
@@ -278,6 +295,14 @@ const App: React.FC = () => {
             Volver
           </button>
         </div>
+      </div>
+    );
+  }
+
+  if (path.startsWith("/admin") && authReady && isAllowlisted && userRole === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="text-sm text-gray-500">Cargando panel...</div>
       </div>
     );
   }

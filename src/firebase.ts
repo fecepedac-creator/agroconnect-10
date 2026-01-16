@@ -42,3 +42,9 @@ export async function syncUserAccess(): Promise<{
   const res = await fn({});
   return res.data as any;
 }
+
+export async function syncSuperadminClaims(): Promise<{ ok: boolean }> {
+  const fn = httpsCallable(functions, "syncSuperadminClaims");
+  const res = await fn({});
+  return res.data as any;
+}

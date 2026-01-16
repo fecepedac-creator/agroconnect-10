@@ -3,6 +3,7 @@ import {
   onDocumentCreated,
   onDocumentUpdated,
 } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { defineSecret } from "firebase-functions/params";
 import nodemailer from "nodemailer";
 
@@ -22,14 +23,12 @@ const DEFAULT_FROM_NAME = "AgroConnect";
 const SUPERADMIN_EMAILS = ["fecepedac@gmail.com"];
 
 function isSuperAdminToken(token: any): boolean {
-  const email = String(token?.email || "").toLowerCase();
   const role = String(token?.role || "").toLowerCase();
   return (
     token?.admin === true ||
     token?.superadmin === true ||
     role === "admin" ||
-    role === "superadmin" ||
-    SUPERADMIN_EMAILS.includes(email)
+    role === "superadmin"
   );
 }
 
@@ -151,6 +150,42 @@ export const syncUserAccess = onCall(async (request) => {
   await userRef.set(payload, { merge: true });
 
   return { ok: true, role, companyId };
+});
+
+/**
+ * =========================
+ *  SUPERADMIN CLAIMS (Callable)
+ * =========================
+ * Setea claims admin/superadmin si el email está en allowlist server-side.
+ */
+export const syncSuperadminClaims = onCall(async (request) => {
+  const user = await assertAuthenticated(request);
+  const email = String(user.token.email || "").toLowerCase();
+  if (!SUPERADMIN_EMAILS.includes(email)) {
+    throw new HttpsError("permission-denied", "No tienes permisos de SuperAdmin.");
+  }
+
+  const auth = admin.auth();
+  const current = await auth.getUser(user.uid);
+  const existingClaims = current.customClaims || {};
+  const nextClaims = {
+    ...existingClaims,
+    admin: true,
+    superadmin: true,
+    role: "superadmin",
+  };
+
+  await auth.setCustomUserClaims(user.uid, nextClaims);
+  await db.collection("users").doc(user.uid).set(
+    {
+      role: "superadmin",
+      email,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return { ok: true };
 });
 
 /**
@@ -1012,3 +1047,32 @@ export const sendEmailFromOutbox = onDocumentCreated(
     }
   }
 );
+
+/**
+ * =========================
+ *  COMMS OUTBOX WATCHDOG
+ * =========================
+ * Marca como error los mensajes en "sending" que quedaron colgados.
+ */
+export const commsOutboxWatchdog = onSchedule("every 10 minutes", async () => {
+  const cutoffMs = Date.now() - 15 * 60 * 1000;
+  const cutoff = admin.firestore.Timestamp.fromMillis(cutoffMs);
+  const snap = await db
+    .collection("comms_outbox")
+    .where("status", "==", "sending")
+    .where("sendingAt", "<", cutoff)
+    .limit(50)
+    .get();
+
+  if (snap.empty) return;
+
+  const batch = db.batch();
+  snap.docs.forEach((docSnap) => {
+    batch.update(docSnap.ref, {
+      status: "error",
+      error: "watchdog_timeout",
+      failedAt: FieldValue.serverTimestamp(),
+    });
+  });
+  await batch.commit();
+});

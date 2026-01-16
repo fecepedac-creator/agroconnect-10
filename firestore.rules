@@ -31,17 +31,6 @@ service cloud.firestore {
           : "none";
     }
 
-    function userAccessDoc() {
-      return get(/databases/$(database)/documents/userAccess/$(request.auth.uid));
-    }
-
-    function userAccessRole() {
-      return exists(/databases/$(database)/documents/userAccess/$(request.auth.uid))
-        && userAccessDoc().data.role != null
-          ? userAccessDoc().data.role
-          : "none";
-    }
-
     /* ======================
        SUPER ADMIN
        ====================== */
@@ -55,12 +44,7 @@ service cloud.firestore {
           || request.auth.token.role == "admin"
           || request.auth.token.role == "SUPERADMIN"
           || request.auth.token.role == "superadmin"
-          || [
-            "fecepedac@gmail.com"
-          ].hasAny([request.auth.token.email])
           || myRole() == "superadmin"
-          || userAccessRole() == "ADMIN"
-          || userAccessRole() == "admin"
         );
     }
 
@@ -215,7 +199,7 @@ service cloud.firestore {
                     || isWorker();
 
         allow create, update: if isSuperAdmin() || isMyCompany(companyId);
-        allow delete: if isSuperAdmin();
+        allow delete: if isSuperAdmin() || isMyCompany(companyId);
 
         /* ----- APPLICATIONS ----- */
         match /applications/{appId} {
@@ -256,6 +240,12 @@ service cloud.firestore {
             allow delete: if isSuperAdmin();
           }
         }
+
+        /* ----- POSTERS ----- */
+        match /posters/{posterId} {
+          allow read, write: if isSuperAdmin() || isMyCompany(companyId);
+          allow delete: if isSuperAdmin() || isMyCompany(companyId);
+        }
       }
 
       /* ----- BILLING ----- */
@@ -289,7 +279,13 @@ service cloud.firestore {
     }
 
     match /stats_companies/{companyId} {
-      allow read, write: if isSuperAdmin();
+      allow read: if isSuperAdmin() || isMyCompany(companyId);
+      allow write: if isSuperAdmin();
+
+      match /monthly/{ym} {
+        allow read: if isSuperAdmin() || isMyCompany(companyId);
+        allow write: if isSuperAdmin();
+      }
     }
 
     match /finops_infra/{ym} {
@@ -307,7 +303,8 @@ service cloud.firestore {
     // Cola de mensajes (UI → Function / Trigger Email)
     match /comms_outbox/{docId} {
       allow create: if isSuperAdmin();
-      allow read: if isSuperAdmin(); // solo auditoría
+      allow read: if isSuperAdmin()
+        || (isCompany() && resource.data.companyId == myCompanyId());
       allow update, delete: if false;
     }
 
