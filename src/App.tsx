@@ -56,6 +56,9 @@ type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
 const App: React.FC = () => {
   const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
+  const [path, setPath] = useState(window.location.pathname);
+  const [authReady, setAuthReady] = useState(false);
+  const [authUserEmail, setAuthUserEmail] = useState<string | null>(null);
 
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
 
@@ -185,6 +188,12 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const handlePop = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
+
+  useEffect(() => {
     const loadAdminConfig = async () => {
       try {
         const snap = await getDoc(doc(db, "admin", "config"));
@@ -217,9 +226,12 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
-      if (!user?.email) return;
-      const email = user.email.trim().toLowerCase();
-      if (SUPERADMIN_EMAILS.includes(email)) {
+      const email = user?.email?.trim().toLowerCase() || null;
+      setAuthUserEmail(email);
+      setAuthReady(true);
+      if (!email) return;
+      const isSuperAdmin = SUPERADMIN_EMAILS.includes(email);
+      if (isSuperAdmin && path.startsWith("/admin")) {
         setUserRole(UserRole.ADMIN);
         setCurrentCompany(null);
         setAdminTab("OVERVIEW");
@@ -227,7 +239,72 @@ const App: React.FC = () => {
       }
     });
     return () => unsub();
-  }, [SUPERADMIN_EMAILS]);
+  }, [SUPERADMIN_EMAILS, path]);
+
+  useEffect(() => {
+    if (!path.startsWith("/admin") && userRole === UserRole.ADMIN) {
+      setUserRole(null);
+      setCurrentCompany(null);
+      setCurrentView(AppView.DASHBOARD);
+    }
+  }, [path, userRole]);
+
+  const isAllowlisted = authUserEmail ? SUPERADMIN_EMAILS.includes(authUserEmail) : false;
+
+  if (path.startsWith("/admin") && !authReady) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="text-sm text-gray-500">Cargando acceso...</div>
+      </div>
+    );
+  }
+
+  if (path.startsWith("/admin") && authReady && authUserEmail == null) {
+    return (
+      <div className="min-h-screen bg-gray-50 font-sans">
+        <LoginScreen
+          companies={companies}
+          companiesLoading={companiesLoading}
+          companiesError={companiesError}
+          onRetryCompanies={loadCompanies}
+          onSelectRole={handleRoleSelect}
+          onRegisterLead={handleRegisterLead}
+        />
+      </div>
+    );
+  }
+
+  if (path.startsWith("/admin") && authReady && authUserEmail != null && !isAllowlisted) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm max-w-md w-full">
+          <h2 className="text-xl font-extrabold text-gray-900">No autorizado</h2>
+          <p className="text-sm text-gray-500 mt-2">No tienes permisos para acceder al panel administrativo.</p>
+          <button
+            onClick={() => {
+              window.history.pushState({}, "", "/");
+              setPath("/");
+            }}
+            className="mt-6 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700"
+          >
+            Volver
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (path.startsWith("/admin") && authReady && isAllowlisted && userRole === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="text-sm text-gray-500">Cargando panel...</div>
+      </div>
+    );
+  }
+
+  if (path.startsWith("/trabajos") || path.startsWith("/worker") || path.startsWith("/auth")) {
+    return <WorkerPortal />;
+  }
 
   const handleAdminConfigSave = async (config: AdminConfig) => {
     setAdminConfig(config);
