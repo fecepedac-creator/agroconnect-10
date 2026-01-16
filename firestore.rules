@@ -126,7 +126,7 @@ service cloud.firestore {
       allow write: if isSuperAdmin();
     }
 
-    match /publicJobs/{jobId} {
+    match /publicJobs/{publicJobId} {
       allow read: if true;
       allow write: if isSuperAdmin();
     }

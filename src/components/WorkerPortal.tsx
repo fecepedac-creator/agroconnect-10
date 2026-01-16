@@ -96,20 +96,24 @@ const useAuthUser = () => {
   return { authUser, loading };
 };
 
-const useJobs = () => {
+const useJobs = (mode: "public" | "private") => {
   const [jobs, setJobs] = useState<JobListing[]>([]);
   const companyCache = useRef(new Map<string, string>());
 
   useEffect(() => {
-    const q = query(collectionGroup(db, "jobs"), orderBy("createdAt", "desc"));
+    const q =
+      mode === "public"
+        ? query(collection(db, "publicJobs"), orderBy("updatedAt", "desc"))
+        : query(collectionGroup(db, "jobs"), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(q, async (snap) => {
       const entries = await Promise.all(
         snap.docs.map(async (docSnap) => {
           const data = docSnap.data() as any;
-          const companyId = docSnap.ref.parent.parent?.id ?? data.companyId ?? "";
+          const companyId =
+            mode === "public" ? data.companyId ?? "" : docSnap.ref.parent.parent?.id ?? data.companyId ?? "";
           let companyName = data.companyName ?? "";
 
-          if (!companyName && companyId) {
+          if (mode === "private" && !companyName && companyId) {
             const cached = companyCache.current.get(companyId);
             if (cached) {
               companyName = cached;
@@ -152,7 +156,7 @@ const useJobs = () => {
     });
 
     return () => unsub();
-  }, []);
+  }, [mode]);
 
   return jobs;
 };
@@ -449,7 +453,7 @@ const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied:
 const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
   const { path, navigate } = usePath();
   const { authUser, loading } = useAuthUser();
-  const jobs = useJobs();
+  const jobs = useJobs(authUser ? "private" : "public");
   const applications = useWorkerApplications(authUser?.uid);
   const [workerProfile, setWorkerProfile] = useState<WorkerProfile | null>(null);
   const [workerDocs, setWorkerDocs] = useState<WorkerDocument[]>([]);

@@ -311,6 +311,81 @@ export const onJobCreated = onDocumentCreated("companies/{companyId}/jobs/{jobId
 });
 
 /**
+ * Public jobs sync
+ * - Mirrors publishable active jobs into publicJobs/{companyId}_{jobId}
+ * - When job is closed or unpublishes, marks public job as closed
+ */
+async function upsertPublicJob(companyId: string, jobId: string, data: any) {
+  const publicRef = db.collection("publicJobs").doc(`${companyId}_${jobId}`);
+  let companyName = String(data?.companyName || "").trim();
+
+  if (!companyName) {
+    try {
+      const companySnap = await db.collection("companies").doc(companyId).get();
+      if (companySnap.exists) {
+        companyName = String(companySnap.data()?.name || "").trim();
+      }
+    } catch (e) {
+      console.error("publicJobs: failed to fetch company name", e);
+    }
+  }
+
+  const payload = {
+    companyId,
+    jobId,
+    companyName: companyName || null,
+    title: String(data?.title || ""),
+    description: String(data?.description || ""),
+    workersNeeded: data?.workersNeeded ?? null,
+    workersFilled: data?.workersFilled ?? null,
+    startDate: data?.startDate ?? null,
+    location: data?.location ?? "",
+    coordinates: data?.coordinates ?? null,
+    category: data?.category ?? null,
+    paymentType: data?.paymentType ?? null,
+    payMode: data?.payMode ?? null,
+    payAmount: data?.payAmount ?? null,
+    payDetail: data?.payDetail ?? null,
+    skillsRequired: data?.skillsRequired ?? null,
+    benefits: data?.benefits ?? null,
+    transportInfo: data?.transportInfo ?? null,
+    otherBenefits: data?.otherBenefits ?? null,
+    jobStatus: data?.jobStatus ?? "active",
+    isActive: data?.isActive ?? true,
+    publishedAt: data?.publishedAt ?? null,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await publicRef.set(payload, { merge: true });
+}
+
+async function closePublicJob(companyId: string, jobId: string) {
+  const publicRef = db.collection("publicJobs").doc(`${companyId}_${jobId}`);
+  await publicRef.set(
+    {
+      jobStatus: "closed",
+      isActive: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+export const onJobPublicSyncCreated = onDocumentCreated(
+  "companies/{companyId}/jobs/{jobId}",
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() as any;
+    const { companyId, jobId } = event.params;
+
+    if (data?.publishPublic === true && String(data?.jobStatus || "") === "active") {
+      await upsertPublicJob(companyId, jobId, data);
+    }
+  }
+);
+
+/**
  * Jobs status updated (future/active/closed)
  */
 export const onJobUpdated = onDocumentUpdated("companies/{companyId}/jobs/{jobId}", async (event) => {
@@ -338,6 +413,28 @@ export const onJobUpdated = onDocumentUpdated("companies/{companyId}/jobs/{jobId
   await incGlobal(fieldsGlobal);
   await incCompany(companyId, fieldsCompany);
 });
+
+export const onJobPublicSyncUpdated = onDocumentUpdated(
+  "companies/{companyId}/jobs/{jobId}",
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!after) return;
+
+    const { companyId, jobId } = event.params;
+    const publishPublic = after?.publishPublic === true;
+    const status = String(after?.jobStatus || "");
+
+    if (publishPublic && status === "active") {
+      await upsertPublicJob(companyId, jobId, after);
+      return;
+    }
+
+    if (before?.publishPublic === true || before?.jobStatus === "active") {
+      await closePublicJob(companyId, jobId);
+    }
+  }
+);
 
 /**
  * Applications created (per job)
