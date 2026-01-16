@@ -56,6 +56,7 @@ type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
 const App: React.FC = () => {
   const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
+  const [path, setPath] = useState(window.location.pathname);
 
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
 
@@ -153,6 +154,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    localStorage.removeItem("adminIntent");
     setUserRole(null);
     setCurrentCompany(null);
     setCurrentView(AppView.DASHBOARD);
@@ -182,6 +184,12 @@ const App: React.FC = () => {
 
   useEffect(() => {
     void loadCompanies();
+  }, []);
+
+  useEffect(() => {
+    const handlePop = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
   }, []);
 
   useEffect(() => {
@@ -219,15 +227,51 @@ const App: React.FC = () => {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (!user?.email) return;
       const email = user.email.trim().toLowerCase();
-      if (SUPERADMIN_EMAILS.includes(email)) {
+      const isSuperAdmin = SUPERADMIN_EMAILS.includes(email);
+      const hasAdminIntent = localStorage.getItem("adminIntent") === "1";
+      if (isSuperAdmin && (path.startsWith("/admin") || hasAdminIntent)) {
         setUserRole(UserRole.ADMIN);
         setCurrentCompany(null);
         setAdminTab("OVERVIEW");
         setCurrentView(AppView.ADMIN);
+      } else if (!isSuperAdmin && hasAdminIntent) {
+        localStorage.removeItem("adminIntent");
       }
     });
     return () => unsub();
-  }, [SUPERADMIN_EMAILS]);
+  }, [SUPERADMIN_EMAILS, path]);
+
+  const handleAdminBack = async () => {
+    localStorage.removeItem("adminIntent");
+    await auth.signOut().catch(() => undefined);
+    window.history.pushState({}, "", "/");
+    setPath("/");
+  };
+
+  if (
+    path.startsWith("/admin") &&
+    auth.currentUser &&
+    !SUPERADMIN_EMAILS.includes(auth.currentUser?.email?.toLowerCase() || "")
+  ) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm max-w-md w-full">
+          <h2 className="text-xl font-extrabold text-gray-900">No autorizado</h2>
+          <p className="text-sm text-gray-500 mt-2">No tienes permisos para acceder al panel administrativo.</p>
+          <button
+            onClick={handleAdminBack}
+            className="mt-6 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700"
+          >
+            Volver
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (path.startsWith("/trabajos") || path.startsWith("/worker") || path.startsWith("/auth")) {
+    return <WorkerPortal />;
+  }
 
   const handleAdminConfigSave = async (config: AdminConfig) => {
     setAdminConfig(config);
