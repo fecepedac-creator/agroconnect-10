@@ -156,6 +156,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    localStorage.removeItem("adminIntent");
     setUserRole(null);
     setCurrentCompany(null);
     setCurrentView(AppView.DASHBOARD);
@@ -236,6 +237,8 @@ const App: React.FC = () => {
         setCurrentCompany(null);
         setAdminTab("OVERVIEW");
         setCurrentView(AppView.ADMIN);
+      } else if (!isSuperAdmin && hasAdminIntent) {
+        localStorage.removeItem("adminIntent");
       }
     });
     return () => unsub();
