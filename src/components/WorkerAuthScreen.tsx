@@ -14,15 +14,20 @@ import { auth } from "../firebase";
 type Props = {
   onSuccess: () => void;
   onBack?: () => void;
+  initialMode?: "login" | "register";
 };
 
-export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+export default function WorkerAuthScreen({ onSuccess, onBack, initialMode = "login" }: Props) {
+  const [mode, setMode] = useState<"login" | "register">(initialMode);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [showResetCta, setShowResetCta] = useState(false);
   const [needsRut, setNeedsRut] = useState(false);
+
+  React.useEffect(() => {
+    setMode(initialMode);
+  }, [initialMode]);
 
   // Login
   const [identifier, setIdentifier] = useState("");
@@ -41,11 +46,14 @@ export default function WorkerAuthScreen({ onSuccess, onBack }: Props) {
 
   const handleIdentifierChange = (value: string) => {
     const raw = value.trim();
-    if (raw.includes("@")) {
+    const rawWithoutRutLetters = raw.replace(/[kK]/g, "");
+
+    if (raw.includes("@") || /[a-zA-Z]/.test(rawWithoutRutLetters)) {
       setIdentifier(raw.toLowerCase());
-    } else {
-      setIdentifier(formatRut(raw));
+      return;
     }
+
+    setIdentifier(formatRut(raw));
   };
 
   const handleLogin = async () => {

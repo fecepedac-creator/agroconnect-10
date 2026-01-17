@@ -88,9 +88,8 @@ const App: React.FC = () => {
   const handleRadarClick = () => setCurrentView(AppView.GLOBAL_SEARCH);
   const isDemoMode = Boolean(adminConfig.demoMode);
   const handleRoleSelect = (role: UserRole, companyData?: Company) => {
-    setUserRole(role);
-
     if (role === UserRole.COMPANY && companyData) {
+      setUserRole(role);
       const latestCompanyData = companies.find((c) => c.id === companyData.id) || companyData;
       setCurrentCompany(latestCompanyData);
       setCurrentView(AppView.DASHBOARD);
@@ -98,6 +97,7 @@ const App: React.FC = () => {
     }
 
     if (role === UserRole.ADMIN) {
+      setUserRole(role);
       setCurrentCompany(null);
       setAdminTab("OVERVIEW");
       setCurrentView(AppView.ADMIN);
@@ -108,6 +108,8 @@ const App: React.FC = () => {
       window.location.assign("/trabajos");
       return;
     }
+
+    setUserRole(role);
   };
 
   const handleUpdateCompany = (updated: Company) => {
