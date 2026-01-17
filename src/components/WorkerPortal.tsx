@@ -489,7 +489,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
   }, [authUser, navigate, path]);
 
   useEffect(() => {
-    if (authUser && path === "/auth") {
+    if (authUser && path.startsWith("/auth")) {
       navigate("/worker");
     }
   }, [authUser, navigate, path]);
@@ -550,8 +550,15 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
     );
   }
 
-  if (path === "/auth") {
-    return <WorkerAuthScreen onSuccess={() => navigate("/worker")} onBack={() => navigate("/trabajos")} />;
+  if (path.startsWith("/auth")) {
+    const initialMode = path.startsWith("/auth/register") ? "register" : "login";
+    return (
+      <WorkerAuthScreen
+        onSuccess={() => navigate("/worker")}
+        onBack={() => navigate("/trabajos")}
+        initialMode={initialMode}
+      />
+    );
   }
 
   if (path === "/worker" && authUser) {
@@ -733,7 +740,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
             </div>
           )}
         </div>
-        <RegisterCTASticky onClick={() => navigate("/auth")} />
+        <RegisterCTASticky onClick={() => navigate("/auth/register")} />
       </PublicLayout>
     );
   }
