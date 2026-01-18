@@ -15,7 +15,7 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
-import { db, auth, functions } from "../firebase";
+import { auth, db, debugAuthClaims, functions, setSuperadminByEmail } from "../firebase";
 import {
   AlertTriangle,
   Briefcase,
@@ -207,6 +207,14 @@ type CommsOutboxDoc = {
   createdAt?: any;
   createdBy?: { uid?: string; email?: string | null };
   errorMessage?: string;
+};
+
+type AuthDebugPayload = {
+  email: string | null;
+  uid: string | null;
+  claims: Record<string, unknown>;
+  issuedAt: string | null;
+  expiresAt: string | null;
 };
 
 // --------- Helpers UI ---------
@@ -492,11 +500,48 @@ export default function AdminPanel(props: AdminPanelProps) {
   const [plan, setPlan] = useState<SubscriptionPlan>("Basic");
   const [status, setStatus] = useState<CompanyStatus>("Active");
   const [isPublic, setIsPublic] = useState(true);
+  const [authDebug, setAuthDebug] = useState<AuthDebugPayload | null>(null);
+  const [authDebugLoading, setAuthDebugLoading] = useState(false);
+  const [authDebugError, setAuthDebugError] = useState<string | null>(null);
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
+  const [superadminEmail, setSuperadminEmail] = useState("");
+  const [superadminLoading, setSuperadminLoading] = useState(false);
+  const [superadminMessage, setSuperadminMessage] = useState<{ type: "success" | "error"; text: string } | null>(
+    null
+  );
+
+  const isDev = import.meta.env.DEV;
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setMe(u));
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (!me) {
+      setIsSuperadmin(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    me.getIdTokenResult()
+      .then((token) => {
+        if (!active) return;
+        const role = String(token?.claims?.role || "").toLowerCase();
+        const superadmin = token?.claims?.superadmin === true || role === "superadmin";
+        setIsSuperadmin(superadmin);
+      })
+      .catch(() => {
+        if (!active) return;
+        setIsSuperadmin(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [me]);
 
   // --------- Firestore subscriptions ---------
   useEffect(() => {
@@ -2148,6 +2193,133 @@ export default function AdminPanel(props: AdminPanelProps) {
             </div>
           </div>
         </div>
+
+        {isSuperadmin ? (
+          <div className="rounded-2xl border border-gray-200 p-4 space-y-3">
+            <div>
+              <div className="font-semibold text-gray-900">Gestionar Superadmins</div>
+              <div className="text-xs text-gray-600">Agrega o quita permisos por email.</div>
+            </div>
+            <div className="flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                className={inputBase}
+                value={superadminEmail}
+                onChange={(e) => setSuperadminEmail(e.target.value)}
+                placeholder="superadmin@agroconnect.cl"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    const email = superadminEmail.trim().toLowerCase();
+                    if (!email) {
+                      setSuperadminMessage({ type: "error", text: "Ingresa un email válido." });
+                      return;
+                    }
+                    setSuperadminLoading(true);
+                    setSuperadminMessage(null);
+                    try {
+                      await setSuperadminByEmail(email, true);
+                      setSuperadminMessage({ type: "success", text: "Superadmin agregado correctamente." });
+                    } catch (error: any) {
+                      setSuperadminMessage({
+                        type: "error",
+                        text: error?.message || "No se pudo agregar el superadmin.",
+                      });
+                    } finally {
+                      setSuperadminLoading(false);
+                    }
+                  }}
+                  disabled={superadminLoading}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 disabled:opacity-70"
+                >
+                  Agregar
+                </button>
+                <button
+                  onClick={async () => {
+                    const email = superadminEmail.trim().toLowerCase();
+                    if (!email) {
+                      setSuperadminMessage({ type: "error", text: "Ingresa un email válido." });
+                      return;
+                    }
+                    setSuperadminLoading(true);
+                    setSuperadminMessage(null);
+                    try {
+                      await setSuperadminByEmail(email, false);
+                      setSuperadminMessage({ type: "success", text: "Superadmin removido correctamente." });
+                    } catch (error: any) {
+                      setSuperadminMessage({
+                        type: "error",
+                        text: error?.message || "No se pudo remover el superadmin.",
+                      });
+                    } finally {
+                      setSuperadminLoading(false);
+                    }
+                  }}
+                  disabled={superadminLoading}
+                  className="px-4 py-2 rounded-xl bg-gray-900 text-white text-xs font-bold hover:bg-black disabled:opacity-70"
+                >
+                  Quitar
+                </button>
+              </div>
+            </div>
+            {superadminMessage ? (
+              <div
+                className={
+                  "text-xs rounded-xl px-3 py-2 " +
+                  (superadminMessage.type === "success"
+                    ? "text-emerald-700 bg-emerald-50 border border-emerald-200"
+                    : "text-rose-700 bg-rose-50 border border-rose-200")
+                }
+              >
+                {superadminMessage.text}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {isDev && isSuperadmin ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+            <div>
+              <div className="font-semibold text-gray-900">Auth Debug</div>
+              <div className="text-xs text-gray-600">
+                Disponible solo en desarrollo para superadmin.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={async () => {
+                  setAuthDebugLoading(true);
+                  setAuthDebugError(null);
+                  try {
+                    const payload = await debugAuthClaims();
+                    if (!payload) {
+                      setAuthDebug(null);
+                      setAuthDebugError("No hay usuario autenticado o modo producción.");
+                      return;
+                    }
+                    setAuthDebug(payload);
+                  } catch (error) {
+                    setAuthDebugError("No se pudieron cargar los claims.");
+                  } finally {
+                    setAuthDebugLoading(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-gray-900 text-white text-xs font-bold hover:bg-black disabled:opacity-70"
+                disabled={authDebugLoading}
+              >
+                {authDebugLoading ? "Cargando..." : "Refrescar claims"}
+              </button>
+              {authDebugError ? <span className="text-xs text-rose-600">{authDebugError}</span> : null}
+            </div>
+            {authDebug ? (
+              <pre className="whitespace-pre-wrap text-xs text-gray-800 bg-white border border-amber-200 rounded-xl p-3 overflow-x-auto">
+                {JSON.stringify(authDebug, null, 2)}
+              </pre>
+            ) : (
+              <div className="text-xs text-gray-500">Sin datos aún.</div>
+            )}
+          </div>
+        ) : null}
       </div>
     );
   }

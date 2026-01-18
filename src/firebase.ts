@@ -26,6 +26,42 @@ export const auth: Auth = getAuth(app);
 // Cloud Functions (para aprovisionamiento seguro de roles/usuarios)
 export const functions: Functions = getFunctions(app, "us-central1");
 
+type AuthDebugPayload = {
+  email: string | null;
+  uid: string | null;
+  claims: Record<string, unknown>;
+  issuedAt: string | null;
+  expiresAt: string | null;
+};
+
+export async function debugAuthClaims(): Promise<AuthDebugPayload | null> {
+  if (!import.meta.env.DEV) {
+    return null;
+  }
+
+  const user = auth.currentUser;
+  if (!user) {
+    console.warn("[Auth Debug] No hay usuario autenticado.");
+    return null;
+  }
+
+  const token = await user.getIdTokenResult(true);
+  const payload: AuthDebugPayload = {
+    email: user.email ?? null,
+    uid: user.uid ?? null,
+    claims: (token?.claims || {}) as Record<string, unknown>,
+    issuedAt: token?.issuedAtTime ?? null,
+    expiresAt: token?.expirationTime ?? null,
+  };
+  console.info("[Auth Debug] Claims:", payload);
+  return payload;
+}
+
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (window as any).__auth = auth;
+  (window as any).__debugAuthClaims = debugAuthClaims;
+}
+
 /**
  * Sincroniza el acceso del usuario autenticado:
  * - Si su email coincide con adminEmail de alguna empresa => role=company_admin + companyId
@@ -46,5 +82,14 @@ export async function syncUserAccess(): Promise<{
 export async function syncSuperadminClaims(): Promise<{ ok: boolean }> {
   const fn = httpsCallable(functions, "syncSuperadminClaims");
   const res = await fn({});
+  return res.data as any;
+}
+
+export async function setSuperadminByEmail(
+  email: string,
+  makeSuperadmin = true
+): Promise<{ ok: boolean; uid: string; email: string; superadmin: boolean }> {
+  const fn = httpsCallable(functions, "setSuperadminByEmail");
+  const res = await fn({ email, makeSuperadmin });
   return res.data as any;
 }

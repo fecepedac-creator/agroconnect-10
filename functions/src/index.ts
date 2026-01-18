@@ -40,6 +40,16 @@ async function assertAuthenticated(request: any) {
   return user;
 }
 
+function normalizeEmail(input: unknown): string {
+  return String(input || "")
+    .trim()
+    .toLowerCase();
+}
+
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 async function getUserRole(uid: string): Promise<string> {
   try {
     const snap = await db.collection("users").doc(uid).get();
@@ -160,7 +170,7 @@ export const syncUserAccess = onCall(async (request) => {
  */
 export const syncSuperadminClaims = onCall(async (request) => {
   const user = await assertAuthenticated(request);
-  const email = String(user.token.email || "").toLowerCase();
+  const email = normalizeEmail(user.token.email);
   if (!SUPERADMIN_EMAILS.includes(email)) {
     throw new HttpsError("permission-denied", "No tienes permisos de SuperAdmin.");
   }
@@ -186,6 +196,76 @@ export const syncSuperadminClaims = onCall(async (request) => {
   );
 
   return { ok: true };
+});
+
+/**
+ * =========================
+ *  SUPERADMIN CLAIMS (Callable)
+ * =========================
+ * Permite agregar/quitar superadmin por email.
+ */
+export const setSuperadminByEmail = onCall(async (request) => {
+  const user = await assertAuthenticated(request);
+  const callerEmail = normalizeEmail(user.token.email);
+  const callerIsSuperadmin = isSuperAdminToken(user.token);
+
+  if (!callerIsSuperadmin && !SUPERADMIN_EMAILS.includes(callerEmail)) {
+    throw new HttpsError("permission-denied", "No tienes permisos para gestionar superadmins.");
+  }
+
+  const targetEmail = normalizeEmail(request.data?.email);
+  if (!targetEmail || !isValidEmail(targetEmail)) {
+    throw new HttpsError("invalid-argument", "Email inválido.");
+  }
+
+  const makeSuperadmin = request.data?.makeSuperadmin !== false;
+
+  let targetUser;
+  try {
+    targetUser = await admin.auth().getUserByEmail(targetEmail);
+  } catch (error) {
+    throw new HttpsError("not-found", "No se encontró un usuario con ese email.");
+  }
+
+  const existingClaims = targetUser.customClaims || {};
+  const nextClaims: Record<string, any> = { ...existingClaims };
+
+  if (makeSuperadmin) {
+    nextClaims.admin = true;
+    nextClaims.superadmin = true;
+    nextClaims.role = "superadmin";
+  } else {
+    delete nextClaims.admin;
+    delete nextClaims.superadmin;
+    if (nextClaims.role === "superadmin") {
+      nextClaims.role = "worker";
+    }
+  }
+
+  await admin.auth().setCustomUserClaims(targetUser.uid, nextClaims);
+
+  await db
+    .collection("users")
+    .doc(targetUser.uid)
+    .set(
+      {
+        email: targetEmail,
+        role: makeSuperadmin ? "superadmin" : "worker",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+  await db.collection("admin_audit").add({
+    action: makeSuperadmin ? "grant_superadmin" : "revoke_superadmin",
+    targetUid: targetUser.uid,
+    targetEmail,
+    performedByUid: user.uid,
+    performedByEmail: callerEmail,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, uid: targetUser.uid, email: targetEmail, superadmin: makeSuperadmin };
 });
 
 /**
