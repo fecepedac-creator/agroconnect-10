@@ -9,7 +9,7 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
-import { auth, db } from "./firebase";
+import { auth, db, syncSuperadminClaims } from "./firebase";
 
 import {
   LayoutDashboard,
@@ -58,6 +58,7 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
   const [path, setPath] = useState(window.location.pathname);
   const [authReady, setAuthReady] = useState(false);
+  const [roleReady, setRoleReady] = useState(false);
   const [authUserEmail, setAuthUserEmail] = useState<string | null>(null);
   const [isAdminClaim, setIsAdminClaim] = useState(false);
 
@@ -188,6 +189,20 @@ const App: React.FC = () => {
     return () => window.removeEventListener("popstate", handlePop);
   }, []);
 
+  const authDebugEnabled = import.meta.env.DEV;
+  const logAuthInfo = (...args: any[]) => {
+    if (authDebugEnabled) {
+      // eslint-disable-next-line no-console
+      console.info("[Auth Debug]", ...args);
+    }
+  };
+  const logAuthError = (...args: any[]) => {
+    if (authDebugEnabled) {
+      // eslint-disable-next-line no-console
+      console.info("[Auth Debug][Error]", ...args);
+    }
+  };
+
   useEffect(() => {
     const loadAdminConfig = async () => {
       try {
@@ -224,10 +239,26 @@ const App: React.FC = () => {
       const email = user?.email?.trim().toLowerCase() || null;
       setAuthUserEmail(email);
       setAuthReady(true);
+      setRoleReady(false);
       setIsAdminClaim(false);
-      if (!user) return;
+      const isAdminRoute = path.startsWith("/admin");
+      logAuthInfo("Auth state changed", { path, email, isAdminRoute });
+      if (!user) {
+        setRoleReady(true);
+        return;
+      }
 
-      const token = await user.getIdTokenResult();
+      if (isAdminRoute) {
+        try {
+          logAuthInfo("Syncing superadmin claims...");
+          await syncSuperadminClaims();
+          logAuthInfo("syncSuperadminClaims ok");
+        } catch (error) {
+          logAuthError("syncSuperadminClaims failed", error);
+        }
+      }
+
+      const token = await user.getIdTokenResult(isAdminRoute);
       const role = String(token?.claims?.role || "").toLowerCase();
       const hasAdminClaim =
         token?.claims?.admin === true ||
@@ -235,8 +266,10 @@ const App: React.FC = () => {
         role === "admin" ||
         role === "superadmin";
       setIsAdminClaim(hasAdminClaim);
+      setRoleReady(true);
+      logAuthInfo("Claims evaluated", { claims: token?.claims, hasAdminClaim });
 
-      if (hasAdminClaim && path.startsWith("/admin")) {
+      if (hasAdminClaim && isAdminRoute) {
         setUserRole(UserRole.ADMIN);
         setCurrentCompany(null);
         setAdminTab("OVERVIEW");
@@ -258,7 +291,7 @@ const App: React.FC = () => {
 
   const isAllowlisted = authUserEmail ? isAdminClaim : false;
 
-  if (path.startsWith("/admin") && !authReady) {
+  if (path.startsWith("/admin") && (!authReady || !roleReady)) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="text-sm text-gray-500">Cargando acceso...</div>
@@ -266,7 +299,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (path.startsWith("/admin") && authReady && authUserEmail == null) {
+  if (path.startsWith("/admin") && authReady && roleReady && authUserEmail == null) {
     return (
       <div className="min-h-screen bg-gray-50 font-sans">
         <LoginScreen
@@ -281,7 +314,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (path.startsWith("/admin") && authReady && authUserEmail != null && !isAllowlisted) {
+  if (path.startsWith("/admin") && authReady && roleReady && authUserEmail != null && !isAllowlisted) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm max-w-md w-full">
@@ -301,7 +334,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (path.startsWith("/admin") && authReady && isAllowlisted && userRole === null) {
+  if (path.startsWith("/admin") && authReady && roleReady && isAllowlisted && userRole === null) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="text-sm text-gray-500">Cargando panel...</div>
