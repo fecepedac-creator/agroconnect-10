@@ -196,11 +196,15 @@ export default function LoginScreen({
       const rawIntent = sessionStorage.getItem(LOGIN_INTENT_KEY);
       if (!rawIntent) return;
       const intent = JSON.parse(rawIntent) as { role?: "admin" | "companyAdmin"; companyId?: string };
+      let shouldClearIntent = true;
 
       try {
         if (intent.role === "admin") {
           const cred = await getRedirectResult(auth);
-          if (!cred?.user) return;
+          if (!cred?.user) {
+            shouldClearIntent = false;
+            return;
+          }
           const email = (cred.user.email || "").trim().toLowerCase();
           if (!email) {
             await signOut(auth);
@@ -262,7 +266,9 @@ export default function LoginScreen({
       } catch (e: any) {
         setError(e?.message || "No se pudo completar el inicio de sesión.");
       } finally {
-        sessionStorage.removeItem(LOGIN_INTENT_KEY);
+        if (shouldClearIntent) {
+          sessionStorage.removeItem(LOGIN_INTENT_KEY);
+        }
       }
     };
 

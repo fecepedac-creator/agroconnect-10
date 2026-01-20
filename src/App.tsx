@@ -374,6 +374,14 @@ const App: React.FC = () => {
     );
   };
 
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="text-sm text-gray-500">Cargando acceso...</div>
+      </div>
+    );
+  }
+
   // ✅ Evita overlay: si no hay rol seleccionado, SOLO se muestra LoginScreen (landing).
   if (userRole === null && !path.startsWith("/admin")) {
     return (
