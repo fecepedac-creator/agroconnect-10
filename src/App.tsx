@@ -375,7 +375,7 @@ const App: React.FC = () => {
   };
 
   // ✅ Evita overlay: si no hay rol seleccionado, SOLO se muestra LoginScreen (landing).
-  if (userRole === null) {
+  if (userRole === null && !path.startsWith("/admin")) {
     return (
       <div className="min-h-screen bg-gray-50 font-sans">
         <LoginScreen
