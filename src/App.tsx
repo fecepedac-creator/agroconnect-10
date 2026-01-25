@@ -292,9 +292,10 @@ const App: React.FC = () => {
         if (snap.exists()) {
           setGlobalStats(snap.data() as any);
         } else {
+          // Fallback to computed stats if no document exists
           setGlobalStats({
-            companiesTotal: companies.length,
-            companiesActive: companies.filter(c => c.status === 'active').length,
+            companiesTotal: 0,
+            companiesActive: 0,
           });
         }
       },
@@ -304,7 +305,7 @@ const App: React.FC = () => {
       }
     );
     return () => unsub();
-  }, [userRole, companies]);
+  }, [userRole]);
 
   // Subscribe to public workers pool (for Global Search)
   useEffect(() => {
