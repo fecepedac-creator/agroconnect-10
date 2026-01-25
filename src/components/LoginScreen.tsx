@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { GoogleAuthProvider, getRedirectResult, signInWithRedirect, signOut } from "firebase/auth";
+import { GoogleAuthProvider, getRedirectResult, signInWithRedirect, signInWithPopup, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db, syncSuperadminClaims, syncUserAccess } from "../firebase";
 import { completeCompanyLogin, startCompanyLogin } from "../services/authCompany";
@@ -179,12 +179,63 @@ export default function LoginScreen({
     setError(null);
     setLoading("admin");
     try {
+      const provider = new GoogleAuthProvider();
+      
+      // Use popup instead of redirect - more reliable
+      const cred = await signInWithPopup(auth, provider);
+      
+      if (!cred?.user) {
+        setError("No se pudo obtener credenciales de Google.");
+        return;
+      }
+      
+      const email = (cred.user.email || "").trim().toLowerCase();
+      if (!email) {
+        await signOut(auth);
+        setError("Tu cuenta Google no tiene email disponible. Intenta con otra cuenta.");
+        return;
+      }
+      
+      // Sync superadmin claims
+      try {
+        await syncSuperadminClaims();
+      } catch (e: any) {
+        await signOut(auth);
+        setError(e?.message || "No tienes permisos de SuperAdmin para esta app.");
+        return;
+      }
+      
+      // Get fresh token with claims
+      const token = await cred.user.getIdTokenResult(true);
+      const role = String(token?.claims?.role || "").toLowerCase();
+      const isAdmin =
+        token?.claims?.admin === true ||
+        token?.claims?.superadmin === true ||
+        role === "admin" ||
+        role === "superadmin";
+      
+      if (!isAdmin) {
+        await signOut(auth);
+        setError("No tienes permisos de SuperAdmin para esta app.");
+        return;
+      }
+      
+      // Navigate to admin and set role
       window.history.pushState({}, "", "/admin");
       window.dispatchEvent(new PopStateEvent("popstate"));
-      const provider = new GoogleAuthProvider();
-      sessionStorage.setItem(LOGIN_INTENT_KEY, JSON.stringify({ role: "admin" }));
-      await signInWithRedirect(auth, provider);
+      onSelectRole(UserRole.ADMIN);
+      
     } catch (e: any) {
+      // Handle popup closed by user
+      if (e?.code === "auth/popup-closed-by-user") {
+        setError(null); // User cancelled, not an error
+        return;
+      }
+      // Handle popup blocked
+      if (e?.code === "auth/popup-blocked") {
+        setError("El popup fue bloqueado. Permite popups para este sitio e intenta de nuevo.");
+        return;
+      }
       setError(e?.message || "No se pudo iniciar sesión de SuperAdmin.");
     } finally {
       setLoading(null);
@@ -199,42 +250,9 @@ export default function LoginScreen({
       let shouldClearIntent = true;
 
       try {
-        if (intent.role === "admin") {
-          const cred = await getRedirectResult(auth);
-          if (!cred?.user) {
-            shouldClearIntent = false;
-            return;
-          }
-          const email = (cred.user.email || "").trim().toLowerCase();
-          if (!email) {
-            await signOut(auth);
-            setError("Tu cuenta Google no tiene email disponible. Intenta con otra cuenta.");
-            return;
-          }
-          try {
-            await syncSuperadminClaims();
-          } catch (e: any) {
-            await signOut(auth);
-            setError(e?.message || "No tienes permisos de SuperAdmin para esta app.");
-            return;
-          }
-
-          const token = await cred.user.getIdTokenResult(true);
-          const role = String(token?.claims?.role || "").toLowerCase();
-          const isAdmin =
-            token?.claims?.admin === true ||
-            token?.claims?.superadmin === true ||
-            role === "admin" ||
-            role === "superadmin";
-
-          if (!isAdmin) {
-            await signOut(auth);
-            setError("No tienes permisos de SuperAdmin para esta app.");
-            return;
-          }
-          onSelectRole(UserRole.ADMIN);
-        }
-
+        // Admin login now uses popup flow in handleAdminUnlock
+        // Keep this branch only for company admin flow
+        
         if (intent.role === "companyAdmin") {
           const user = await completeCompanyLogin();
           if (!user) return;

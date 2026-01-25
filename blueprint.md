@@ -12,7 +12,33 @@ AgroConnect is a React/Vite + Firebase application that connects agricultural co
 
 ## Recent Changes
 
-### Token Refresh After Claims Update (Latest)
+### SuperAdmin Login: signInWithPopup Implementation (Latest)
+Fixed SuperAdmin authentication to use popup instead of redirect for more reliable login flow:
+
+1. **Updated `LoginScreen.tsx` imports**:
+   - Added `signInWithPopup` to Firebase Auth imports
+   - Kept `signInWithRedirect` and `getRedirectResult` for company admin flow
+
+2. **Rewrote `handleAdminUnlock` function**:
+   - Changed from `signInWithRedirect` to `signInWithPopup` for SuperAdmin authentication
+   - Handles authentication entirely in the popup callback
+   - Includes proper error handling for popup-closed and popup-blocked scenarios
+   - Validates email, syncs superadmin claims, and checks permissions before navigation
+   - Provides clear user feedback for all error conditions
+
+3. **Simplified `useEffect` redirect handling**:
+   - Removed admin branch from `consumeRedirect` logic
+   - Admin login now handled completely in popup callback
+   - Company admin redirect flow remains unchanged
+
+**Benefits**:
+- ✅ More reliable authentication across different environments
+- ✅ Works in development servers and Firebase Hosting
+- ✅ Better user experience with immediate feedback
+- ✅ Proper error handling for popup-closed and popup-blocked scenarios
+- ✅ No more stuck redirect flows with Firebase auth iframes
+
+### Token Refresh After Claims Update
 Enhanced authentication flow to automatically refresh Firebase Auth tokens after custom claims are updated by Cloud Functions:
 
 1. **Updated `syncUserAccess()` function**:
