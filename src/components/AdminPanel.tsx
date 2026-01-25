@@ -1627,7 +1627,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                   <div className="font-semibold text-gray-900 truncate">{c.name}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <Badge>{c.subscriptionPlan || "Basic"}</Badge>
-                    <StatusBadge status={(c.status as any) || "active"} />
+                    <StatusBadge status={c.status || "active"} />
                     {c.region ? <Badge>{c.region}</Badge> : null}
                     {c.industry ? <span className="text-xs text-gray-600 truncate">{c.industry}</span> : null}
                   </div>
@@ -1707,7 +1707,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                   <div className="text-lg font-extrabold text-gray-900">{selectedCompanyDoc.name}</div>
                   <div className="flex flex-wrap gap-2">
                     <Badge>{selectedCompanyDoc.subscriptionPlan || "Basic"}</Badge>
-                    <StatusBadge status={(selectedCompanyDoc.status as any) || "active"} />
+                    <StatusBadge status={selectedCompanyDoc.status || "active"} />
                     {selectedCompanyDoc.rut ? <Badge>{selectedCompanyDoc.rut}</Badge> : null}
                     {selectedCompanyDoc.address?.region ? <Badge>{selectedCompanyDoc.address.region}</Badge> : null}
                   </div>
@@ -2865,7 +2865,7 @@ function TopCompaniesList({ companies }: { companies: CompanyRow[] }) {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <StatusBadge status={(c.status as any) || "active"} />
+              <StatusBadge status={c.status || "active"} />
             </div>
           </div>
         </div>
