@@ -131,11 +131,16 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
 
     try {
       const result = await generateJobDescription(context);
-      setNewJob(prev => ({ ...prev, description: result }));
-      if (result.toLowerCase().includes("no se pudo")) {
-        setNotice({ type: 'error', message: result });
+      if (result && result.length > 50) {
+        // Only update if we got a substantial response
+        setNewJob(prev => ({ ...prev, description: result }));
+        if (result.toLowerCase().includes("no se pudo")) {
+          setNotice({ type: 'error', message: result });
+        } else {
+          setNotice({ type: 'success', message: "Descripción generada con IA exitosamente." });
+        }
       } else {
-        setNotice({ type: 'success', message: "Descripción generada con IA exitosamente." });
+        setNotice({ type: 'error', message: "La respuesta de IA fue demasiado corta o vacía." });
       }
     } catch (error: any) {
       console.error("AI generation error:", error);

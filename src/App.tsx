@@ -28,6 +28,7 @@ import {
 
 import Dashboard from "./components/Dashboard";
 import PublishOffer from "./components/PublishOffer";
+import CompanySelector from "./components/CompanySelector";
 
 import Workers from "./components/Workers";
 import Jobs from "./components/Jobs";
@@ -538,33 +539,17 @@ const App: React.FC = () => {
           {currentView === AppView.JOBS &&
             (userRole === UserRole.ADMIN ? (
               // SuperAdmin view with company selector
-              <div className="space-y-4">
-                <div className="bg-white p-4 rounded-xl border border-gray-100">
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    Selecciona una empresa para gestionar ofertas:
-                  </label>
-                  <select
-                    value={currentCompany?.id || ""}
-                    onChange={(e) => {
-                      const selected = companies.find(c => c.id === e.target.value);
-                      setCurrentCompany(selected || null);
-                    }}
-                    className="w-full md:w-auto px-4 py-2 border border-gray-200 rounded-xl"
-                  >
-                    <option value="">-- Seleccionar empresa --</option>
-                    {companies.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                </div>
-                {currentCompany ? (
+              <CompanySelector
+                companies={companies}
+                currentCompany={currentCompany}
+                onSelectCompany={setCurrentCompany}
+                label="Selecciona una empresa para gestionar ofertas:"
+                placeholder="Selecciona una empresa para ver y gestionar sus ofertas."
+              >
+                {currentCompany && (
                   <Jobs jobs={jobs} setJobs={setJobs} currentCompany={currentCompany} />
-                ) : (
-                  <div className="text-sm text-gray-500 bg-gray-50 p-6 rounded-xl border border-gray-100">
-                    Selecciona una empresa para ver y gestionar sus ofertas.
-                  </div>
                 )}
-              </div>
+              </CompanySelector>
             ) : currentCompany ? (
               <Jobs jobs={jobs} setJobs={setJobs} currentCompany={currentCompany} />
             ) : (
@@ -572,33 +557,17 @@ const App: React.FC = () => {
             ))}
           {currentView === AppView.PUBLISH_OFFER && (
             userRole === UserRole.ADMIN ? (
-              <div className="space-y-4">
-                <div className="bg-white p-4 rounded-xl border border-gray-100">
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    Selecciona una empresa para publicar oferta:
-                  </label>
-                  <select
-                    value={currentCompany?.id || ""}
-                    onChange={(e) => {
-                      const selected = companies.find(c => c.id === e.target.value);
-                      setCurrentCompany(selected || null);
-                    }}
-                    className="w-full md:w-auto px-4 py-2 border border-gray-200 rounded-xl"
-                  >
-                    <option value="">-- Seleccionar empresa --</option>
-                    {companies.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                </div>
-                {currentCompany ? (
+              <CompanySelector
+                companies={companies}
+                currentCompany={currentCompany}
+                onSelectCompany={setCurrentCompany}
+                label="Selecciona una empresa para publicar oferta:"
+                placeholder="Selecciona una empresa para publicar ofertas."
+              >
+                {currentCompany && (
                   <PublishOffer company={currentCompany} onNavigate={setCurrentView} />
-                ) : (
-                  <div className="text-sm text-gray-500 bg-gray-50 p-6 rounded-xl border border-gray-100">
-                    Selecciona una empresa para publicar ofertas.
-                  </div>
                 )}
-              </div>
+              </CompanySelector>
             ) : currentCompany ? (
               <PublishOffer company={currentCompany} onNavigate={setCurrentView} />
             ) : (
