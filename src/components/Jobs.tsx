@@ -61,7 +61,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
     lng: -71.239
   });
 
-  const isSuspended = currentCompany?.status === 'Overdue';
+  const isSuspended = currentCompany?.status === 'overdue' || currentCompany?.status === 'Overdue';
 
   // --- Firestore sync: companies/{companyId}/jobs ---
   useEffect(() => {

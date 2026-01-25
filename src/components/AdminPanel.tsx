@@ -42,7 +42,7 @@ import {
  */
 
 type SubscriptionPlan = "Basic" | "Pro" | "Enterprise";
-type CompanyStatus = "Active" | "Pending" | "Suspended" | "Overdue";
+type CompanyStatus = "active" | "pending" | "suspended" | "overdue";
 
 type Address = {
   line1?: string;
@@ -234,13 +234,13 @@ function Badge({ children }: { children: React.ReactNode }) {
 
 function statusLabel(s?: CompanyStatus) {
   switch (s) {
-    case "Overdue":
+    case "overdue":
       return "Morosa";
-    case "Suspended":
+    case "suspended":
       return "Suspendida";
-    case "Pending":
+    case "pending":
       return "Pendiente";
-    case "Active":
+    case "active":
     default:
       return "Pagos al día";
   }
@@ -248,13 +248,13 @@ function statusLabel(s?: CompanyStatus) {
 
 function statusPillClasses(s?: CompanyStatus) {
   switch (s) {
-    case "Overdue":
+    case "overdue":
       return "border-red-300 bg-red-100 text-red-800 font-semibold";
-    case "Suspended":
+    case "suspended":
       return "border-gray-300 bg-gray-100 text-gray-700";
-    case "Pending":
+    case "pending":
       return "border-amber-200 bg-amber-50 text-amber-800";
-    case "Active":
+    case "active":
     default:
       return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
@@ -266,7 +266,7 @@ function StatusBadge({ status }: { status?: CompanyStatus }) {
       className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${statusPillClasses(
         status
       )}`}
-      title={status || "Active"}
+      title={status || "active"}
     >
       {statusLabel(status)}
     </span>
@@ -498,7 +498,7 @@ export default function AdminPanel(props: AdminPanelProps) {
 
   const [adminEmail, setAdminEmail] = useState("");
   const [plan, setPlan] = useState<SubscriptionPlan>("Basic");
-  const [status, setStatus] = useState<CompanyStatus>("Active");
+  const [status, setStatus] = useState<CompanyStatus>("active");
   const [isPublic, setIsPublic] = useState(true);
   const [authDebug, setAuthDebug] = useState<AuthDebugPayload | null>(null);
   const [authDebugLoading, setAuthDebugLoading] = useState(false);
@@ -556,7 +556,7 @@ export default function AdminPanel(props: AdminPanelProps) {
             id: d.id,
             name: data.name || "(sin nombre)",
             subscriptionPlan: (data.subscriptionPlan || "Basic") as SubscriptionPlan,
-            status: (data.status || "Active") as CompanyStatus,
+            status: (data.status || "active") as CompanyStatus,
             contactEmail: data.contactEmail || "",
             adminEmail: data.adminEmail || "",
             rut: data.rut || "",
@@ -763,9 +763,9 @@ export default function AdminPanel(props: AdminPanelProps) {
   const effectiveGlobal = useMemo(() => {
     // Fallback: si stats aún no están creadas, estimar con companies list.
     const fallbackCompaniesTotal = companies.length;
-    const fallbackActive = companies.filter((c) => (c.status || "Active") === "Active").length;
-    const fallbackOverdue = companies.filter((c) => (c.status || "") === "Overdue").length;
-    const fallbackSuspended = companies.filter((c) => (c.status || "") === "Suspended").length;
+    const fallbackActive = companies.filter((c) => (c.status || "active") === "active").length;
+    const fallbackOverdue = companies.filter((c) => (c.status || "") === "overdue").length;
+    const fallbackSuspended = companies.filter((c) => (c.status || "") === "suspended").length;
 
     return {
       companiesTotal: clampInt(globalStats?.companiesTotal, fallbackCompaniesTotal),
@@ -944,7 +944,7 @@ export default function AdminPanel(props: AdminPanelProps) {
       // (Opcional/MVP) si registras una factura vencida, marcamos la empresa como morosa
       if (billingType === "invoice" && status === "overdue") {
         await updateDoc(doc(db, "companies", selectedCompanyId), {
-          status: "Overdue",
+          status: "overdue",
           updatedAt: serverTimestamp(),
         } as any);
       }
@@ -1062,7 +1062,7 @@ export default function AdminPanel(props: AdminPanelProps) {
 
     setAdminEmail(data.adminEmail || "");
     setPlan((data.subscriptionPlan || "Basic") as SubscriptionPlan);
-    setStatus((data.status || "Active") as CompanyStatus);
+    setStatus((data.status || "active") as CompanyStatus);
     setIsPublic(Boolean(data.isPublic ?? false));
 
     setModalOpen(true);
@@ -1627,7 +1627,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                   <div className="font-semibold text-gray-900 truncate">{c.name}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <Badge>{c.subscriptionPlan || "Basic"}</Badge>
-                    <StatusBadge status={(c.status as any) || "Active"} />
+                    <StatusBadge status={(c.status as any) || "active"} />
                     {c.region ? <Badge>{c.region}</Badge> : null}
                     {c.industry ? <span className="text-xs text-gray-600 truncate">{c.industry}</span> : null}
                   </div>
@@ -1707,7 +1707,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                   <div className="text-lg font-extrabold text-gray-900">{selectedCompanyDoc.name}</div>
                   <div className="flex flex-wrap gap-2">
                     <Badge>{selectedCompanyDoc.subscriptionPlan || "Basic"}</Badge>
-                    <StatusBadge status={(selectedCompanyDoc.status as any) || "Active"} />
+                    <StatusBadge status={(selectedCompanyDoc.status as any) || "active"} />
                     {selectedCompanyDoc.rut ? <Badge>{selectedCompanyDoc.rut}</Badge> : null}
                     {selectedCompanyDoc.address?.region ? <Badge>{selectedCompanyDoc.address.region}</Badge> : null}
                   </div>
@@ -1753,7 +1753,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                         try {
                           if (!selectedCompanyId) return;
                           await updateDoc(doc(db, "companies", selectedCompanyId), {
-                            status: "Overdue",
+                            status: "overdue",
                             updatedAt: serverTimestamp(),
                           } as any);
                           notify("success", "Empresa marcada como morosa.");
@@ -1771,7 +1771,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                         try {
                           if (!selectedCompanyId) return;
                           await updateDoc(doc(db, "companies", selectedCompanyId), {
-                            status: "Active",
+                            status: "active",
                             updatedAt: serverTimestamp(),
                           } as any);
                           notify("success", "Empresa marcada al día.");
@@ -2865,7 +2865,7 @@ function TopCompaniesList({ companies }: { companies: CompanyRow[] }) {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <StatusBadge status={(c.status as any) || "Active"} />
+              <StatusBadge status={(c.status as any) || "active"} />
             </div>
           </div>
         </div>
