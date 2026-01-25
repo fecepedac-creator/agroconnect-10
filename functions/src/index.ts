@@ -299,10 +299,12 @@ function normalizeJobStatus(raw: any): "future" | "active" | "closed" {
   return "future";
 }
 
-function normalizeCompanyStatus(raw: any): "Active" | "Pending" | "Suspended" | "Overdue" {
-  const s = String(raw || "Active");
-  if (s === "Pending" || s === "Suspended" || s === "Overdue" || s === "Active") return s;
-  return "Active";
+function normalizeCompanyStatus(raw: any): "active" | "pending" | "suspended" | "overdue" {
+  const s = String(raw || "active").toLowerCase();
+  if (s === "pending") return "pending";
+  if (s === "suspended") return "suspended";
+  if (s === "overdue") return "overdue";
+  return "active";
 }
 
 function normalizeApplicationStatus(raw: any): "applied" | "hired" | "rejected" | "other" {
@@ -358,9 +360,10 @@ export const onCompanyCreated = onDocumentCreated("companies/{companyId}", async
     companiesTotal: 1,
   };
 
-  if (status === "Active") globalFields.companiesActive = 1;
-  if (status === "Overdue") globalFields.companiesOverdue = 1;
-  if (status === "Suspended") globalFields.companiesSuspended = 1;
+  if (status === "active") globalFields.companiesActive = 1;
+  if (status === "overdue") globalFields.companiesOverdue = 1;
+  if (status === "suspended") globalFields.companiesSuspended = 1;
+  if (status === "pending") globalFields.companiesPending = 1;
 
   await incGlobal(globalFields);
 });
@@ -379,10 +382,10 @@ export const onCompanyUpdated = onDocumentUpdated("companies/{companyId}", async
 
   const fields: Record<string, number> = {};
   const map: Record<string, string> = {
-    Active: "companiesActive",
-    Overdue: "companiesOverdue",
-    Suspended: "companiesSuspended",
-    Pending: "companiesPending",
+    active: "companiesActive",
+    overdue: "companiesOverdue",
+    suspended: "companiesSuspended",
+    pending: "companiesPending",
   };
 
   const bKey = map[b];
@@ -748,7 +751,7 @@ export const runOperationalAudit = onCall(
 
     const dataQualityNotes: string[] = [];
     const totalCompaniesActive =
-      (await safeCount(db.collection("companies").where("status", "in", ["active", "Active"]))) ?? 0;
+      (await safeCount(db.collection("companies").where("status", "==", "active"))) ?? 0;
 
     let totalJobsActive = await safeCount(db.collectionGroup("jobs").where("isActive", "==", true));
     if (totalJobsActive === null || totalJobsActive === 0) {
@@ -771,7 +774,7 @@ export const runOperationalAudit = onCall(
     }
 
     const overdueCompanies = await safeCount(
-      db.collection("companies").where("status", "in", ["overdue", "Overdue"])
+      db.collection("companies").where("status", "==", "overdue")
     );
     if (overdueCompanies === null) {
       dataQualityNotes.push("No hay señal clara de morosidad disponible.");

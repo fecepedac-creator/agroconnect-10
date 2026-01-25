@@ -61,7 +61,8 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
     lng: -71.239
   });
 
-  const isSuspended = currentCompany?.status === 'Overdue';
+  // TODO: Temporary backward compatibility during migration - remove after status migration is complete
+  const isSuspended = currentCompany?.status === 'overdue' || currentCompany?.status === 'Overdue';
 
   // --- Firestore sync: companies/{companyId}/jobs ---
   useEffect(() => {
