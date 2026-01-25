@@ -50,7 +50,13 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-async function getUserRole(uid: string): Promise<string> {
+async function getUserRole(uid: string, token?: any): Promise<string> {
+  // First try from claims (no Firestore read)
+  if (token?.role) {
+    return String(token.role);
+  }
+  
+  // Fallback to Firestore if no claim exists
   try {
     const snap = await db.collection("users").doc(uid).get();
     return String(snap.data()?.role || "none");
@@ -116,6 +122,9 @@ async function getReplyToEmail(): Promise<string> {
  *
  * Nota:
  * - El superadmin hoy se controla en firestore.rules vía email allowlist.
+ * 
+ * IMPORTANT: After calling this function, clients should refresh their ID token
+ * by calling getIdToken(true) to get the updated custom claims.
  */
 export const syncUserAccess = onCall(async (request) => {
   const user = request.auth;
@@ -159,7 +168,19 @@ export const syncUserAccess = onCall(async (request) => {
 
   await userRef.set(payload, { merge: true });
 
-  return { ok: true, role, companyId };
+  // Set custom claims on Auth token
+  const auth = admin.auth();
+  const currentUser = await auth.getUser(user.uid);
+  const existingClaims = currentUser.customClaims || {};
+  
+  // Preserve existing claims (like admin/superadmin) while updating role/companyId
+  await auth.setCustomUserClaims(user.uid, {
+    ...existingClaims,
+    role,
+    companyId,
+  });
+
+  return { ok: true, role, companyId, claimsUpdated: true };
 });
 
 /**
@@ -873,7 +894,7 @@ export const redactarDifusion = onCall(
       throw new HttpsError("failed-precondition", "IA no configurada aún.");
     }
 
-    const role = await getUserRole(user.uid);
+    const role = await getUserRole(user.uid, user.token);
     if (!isSuperAdminToken(user.token) && !["company_admin", "company_hr"].includes(role)) {
       throw new HttpsError("permission-denied", "No tienes permisos para usar la IA.");
     }
@@ -907,7 +928,7 @@ export const generateJobDescription = onCall(
       throw new HttpsError("failed-precondition", "IA no configurada aún.");
     }
 
-    const role = await getUserRole(user.uid);
+    const role = await getUserRole(user.uid, user.token);
     if (!isSuperAdminToken(user.token) && !["company_admin", "company_hr"].includes(role)) {
       throw new HttpsError("permission-denied", "No tienes permisos para usar la IA.");
     }
