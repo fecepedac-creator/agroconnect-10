@@ -96,20 +96,24 @@ const useAuthUser = () => {
   return { authUser, loading };
 };
 
-const useJobs = () => {
+const useJobs = (mode: "public" | "private") => {
   const [jobs, setJobs] = useState<JobListing[]>([]);
   const companyCache = useRef(new Map<string, string>());
 
   useEffect(() => {
-    const q = query(collectionGroup(db, "jobs"), orderBy("createdAt", "desc"));
+    const q =
+      mode === "public"
+        ? query(collection(db, "publicJobs"), orderBy("updatedAt", "desc"))
+        : query(collectionGroup(db, "jobs"), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(q, async (snap) => {
       const entries = await Promise.all(
         snap.docs.map(async (docSnap) => {
           const data = docSnap.data() as any;
-          const companyId = docSnap.ref.parent.parent?.id ?? data.companyId ?? "";
+          const companyId =
+            mode === "public" ? data.companyId ?? "" : docSnap.ref.parent.parent?.id ?? data.companyId ?? "";
           let companyName = data.companyName ?? "";
 
-          if (!companyName && companyId) {
+          if (mode === "private" && !companyName && companyId) {
             const cached = companyCache.current.get(companyId);
             if (cached) {
               companyName = cached;
@@ -152,7 +156,7 @@ const useJobs = () => {
     });
 
     return () => unsub();
-  }, []);
+  }, [mode]);
 
   return jobs;
 };
@@ -449,7 +453,7 @@ const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied:
 const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
   const { path, navigate } = usePath();
   const { authUser, loading } = useAuthUser();
-  const jobs = useJobs();
+  const jobs = useJobs(authUser ? "private" : "public");
   const applications = useWorkerApplications(authUser?.uid);
   const [workerProfile, setWorkerProfile] = useState<WorkerProfile | null>(null);
   const [workerDocs, setWorkerDocs] = useState<WorkerDocument[]>([]);
@@ -485,7 +489,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
   }, [authUser, navigate, path]);
 
   useEffect(() => {
-    if (authUser && path === "/auth") {
+    if (authUser && path.startsWith("/auth")) {
       navigate("/worker");
     }
   }, [authUser, navigate, path]);
@@ -507,19 +511,31 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
 
     const applicationId = `${selectedJob.companyId}_${selectedJob.id}`;
     const applicationRef = doc(db, "workers", authUser.uid, "applications", applicationId);
-
-    await setDoc(
-      applicationRef,
-      {
-        jobId: selectedJob.id,
-        companyId: selectedJob.companyId,
-        jobTitle: selectedJob.title,
-        companyName: selectedJob.companyName ?? "",
-        appliedAt: serverTimestamp(),
-        status: "postulado",
-      },
-      { merge: true }
+    const companyApplicationRef = doc(
+      db,
+      "companies",
+      selectedJob.companyId,
+      "jobs",
+      selectedJob.id,
+      "applications",
+      applicationId
     );
+
+    const payload = {
+      jobId: selectedJob.id,
+      companyId: selectedJob.companyId,
+      jobTitle: selectedJob.title,
+      companyName: selectedJob.companyName ?? "",
+      workerId: authUser.uid,
+      appliedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      status: "postulado",
+    };
+
+    await Promise.all([
+      setDoc(applicationRef, payload, { merge: true }),
+      setDoc(companyApplicationRef, payload, { merge: true }),
+    ]);
   };
 
   const handleLogout = async () => {
@@ -534,8 +550,15 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
     );
   }
 
-  if (path === "/auth") {
-    return <WorkerAuthScreen onSuccess={() => navigate("/worker")} onBack={() => navigate("/trabajos")} />;
+  if (path.startsWith("/auth")) {
+    const initialMode = path.startsWith("/auth/register") ? "register" : "login";
+    return (
+      <WorkerAuthScreen
+        onSuccess={() => navigate("/worker")}
+        onBack={() => navigate("/trabajos")}
+        initialMode={initialMode}
+      />
+    );
   }
 
   if (path === "/worker" && authUser) {
@@ -717,7 +740,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
             </div>
           )}
         </div>
-        <RegisterCTASticky onClick={() => navigate("/auth")} />
+        <RegisterCTASticky onClick={() => navigate("/auth/register")} />
       </PublicLayout>
     );
   }

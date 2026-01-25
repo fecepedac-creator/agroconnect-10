@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   addDoc,
   collection,
@@ -9,7 +9,7 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
-import { auth, db } from "./firebase";
+import { auth, db, syncSuperadminClaims } from "./firebase";
 
 import {
   LayoutDashboard,
@@ -56,6 +56,11 @@ type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
 const App: React.FC = () => {
   const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
+  const [path, setPath] = useState(window.location.pathname);
+  const [authReady, setAuthReady] = useState(false);
+  const [roleReady, setRoleReady] = useState(false);
+  const [authUserEmail, setAuthUserEmail] = useState<string | null>(null);
+  const [isAdminClaim, setIsAdminClaim] = useState(false);
 
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
 
@@ -83,19 +88,9 @@ const App: React.FC = () => {
 
   const handleRadarClick = () => setCurrentView(AppView.GLOBAL_SEARCH);
   const isDemoMode = Boolean(adminConfig.demoMode);
-  const SUPERADMIN_EMAILS = useMemo(
-    () =>
-      String((import.meta as any)?.env?.VITE_SUPERADMIN_EMAILS ?? "fecepedac@gmail.com")
-        .split(",")
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean),
-    []
-  );
-
   const handleRoleSelect = (role: UserRole, companyData?: Company) => {
-    setUserRole(role);
-
     if (role === UserRole.COMPANY && companyData) {
+      setUserRole(role);
       const latestCompanyData = companies.find((c) => c.id === companyData.id) || companyData;
       setCurrentCompany(latestCompanyData);
       setCurrentView(AppView.DASHBOARD);
@@ -103,6 +98,7 @@ const App: React.FC = () => {
     }
 
     if (role === UserRole.ADMIN) {
+      setUserRole(role);
       setCurrentCompany(null);
       setAdminTab("OVERVIEW");
       setCurrentView(AppView.ADMIN);
@@ -113,6 +109,8 @@ const App: React.FC = () => {
       window.location.assign("/trabajos");
       return;
     }
+
+    setUserRole(role);
   };
 
   const handleUpdateCompany = (updated: Company) => {
@@ -153,6 +151,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    localStorage.removeItem("adminIntent");
     setUserRole(null);
     setCurrentCompany(null);
     setCurrentView(AppView.DASHBOARD);
@@ -164,7 +163,7 @@ const App: React.FC = () => {
     setCompaniesError(null);
     try {
       const list = await getCompanies({
-        demoMode: false,
+        demoMode: isDemoMode,
         demoCompanies: DEMO_COMPANIES,
       });
       setCompanies(list);
@@ -182,7 +181,27 @@ const App: React.FC = () => {
 
   useEffect(() => {
     void loadCompanies();
+  }, [isDemoMode]);
+
+  useEffect(() => {
+    const handlePop = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
   }, []);
+
+  const authDebugEnabled = import.meta.env.DEV;
+  const logAuthInfo = (...args: any[]) => {
+    if (authDebugEnabled) {
+      // eslint-disable-next-line no-console
+      console.info("[Auth Debug]", ...args);
+    }
+  };
+  const logAuthError = (...args: any[]) => {
+    if (authDebugEnabled) {
+      // eslint-disable-next-line no-console
+      console.info("[Auth Debug][Error]", ...args);
+    }
+  };
 
   useEffect(() => {
     const loadAdminConfig = async () => {
@@ -216,18 +235,116 @@ const App: React.FC = () => {
   }, [currentCompany?.id]);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      if (!user?.email) return;
-      const email = user.email.trim().toLowerCase();
-      if (SUPERADMIN_EMAILS.includes(email)) {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      const email = user?.email?.trim().toLowerCase() || null;
+      setAuthUserEmail(email);
+      setAuthReady(true);
+      setRoleReady(false);
+      setIsAdminClaim(false);
+      const isAdminRoute = path.startsWith("/admin");
+      logAuthInfo("Auth state changed", { path, email, isAdminRoute });
+      if (!user) {
+        setRoleReady(true);
+        return;
+      }
+
+      if (isAdminRoute) {
+        try {
+          logAuthInfo("Syncing superadmin claims...");
+          await syncSuperadminClaims();
+          logAuthInfo("syncSuperadminClaims ok");
+        } catch (error) {
+          logAuthError("syncSuperadminClaims failed", error);
+        }
+      }
+
+      const token = await user.getIdTokenResult(isAdminRoute);
+      const role = String(token?.claims?.role || "").toLowerCase();
+      const hasAdminClaim =
+        token?.claims?.admin === true ||
+        token?.claims?.superadmin === true ||
+        role === "admin" ||
+        role === "superadmin";
+      setIsAdminClaim(hasAdminClaim);
+      setRoleReady(true);
+      logAuthInfo("Claims evaluated", { claims: token?.claims, hasAdminClaim });
+
+      if (hasAdminClaim && isAdminRoute) {
         setUserRole(UserRole.ADMIN);
         setCurrentCompany(null);
         setAdminTab("OVERVIEW");
         setCurrentView(AppView.ADMIN);
+      } else if (!hasAdminClaim && localStorage.getItem("adminIntent")) {
+        localStorage.removeItem("adminIntent");
       }
     });
     return () => unsub();
-  }, [SUPERADMIN_EMAILS]);
+  }, [path]);
+
+  useEffect(() => {
+    if (!path.startsWith("/admin") && userRole === UserRole.ADMIN) {
+      setUserRole(null);
+      setCurrentCompany(null);
+      setCurrentView(AppView.DASHBOARD);
+    }
+  }, [path, userRole]);
+
+  const isAllowlisted = authUserEmail ? isAdminClaim : false;
+
+  if (path.startsWith("/admin") && (!authReady || !roleReady)) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="text-sm text-gray-500">Cargando acceso...</div>
+      </div>
+    );
+  }
+
+  if (path.startsWith("/admin") && authReady && roleReady && authUserEmail == null) {
+    return (
+      <div className="min-h-screen bg-gray-50 font-sans">
+        <LoginScreen
+          companies={companies}
+          companiesLoading={companiesLoading}
+          companiesError={companiesError}
+          onRetryCompanies={loadCompanies}
+          onSelectRole={handleRoleSelect}
+          onRegisterLead={handleRegisterLead}
+        />
+      </div>
+    );
+  }
+
+  if (path.startsWith("/admin") && authReady && roleReady && authUserEmail != null && !isAllowlisted) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm max-w-md w-full">
+          <h2 className="text-xl font-extrabold text-gray-900">No autorizado</h2>
+          <p className="text-sm text-gray-500 mt-2">No tienes permisos para acceder al panel administrativo.</p>
+          <button
+            onClick={() => {
+              window.history.pushState({}, "", "/");
+              setPath("/");
+            }}
+            className="mt-6 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700"
+          >
+            Volver
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (path.startsWith("/admin") && authReady && roleReady && isAllowlisted && userRole === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="text-sm text-gray-500">Cargando panel...</div>
+      </div>
+    );
+  }
+
+  if (path.startsWith("/trabajos") || path.startsWith("/worker") || path.startsWith("/auth")) {
+    return <WorkerPortal />;
+  }
 
   const handleAdminConfigSave = async (config: AdminConfig) => {
     setAdminConfig(config);
@@ -257,8 +374,16 @@ const App: React.FC = () => {
     );
   };
 
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="text-sm text-gray-500">Cargando acceso...</div>
+      </div>
+    );
+  }
+
   // ✅ Evita overlay: si no hay rol seleccionado, SOLO se muestra LoginScreen (landing).
-  if (userRole === null) {
+  if (userRole === null && !path.startsWith("/admin")) {
     return (
       <div className="min-h-screen bg-gray-50 font-sans">
         <LoginScreen

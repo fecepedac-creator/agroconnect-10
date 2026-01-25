@@ -11,11 +11,7 @@ export async function startCompanyLogin() {
 export async function completeCompanyLogin() {
   const cred = await getRedirectResult(auth);
   if (!cred?.user) return null;
-  const user = cred.user;
-
-  // El perfil/rol de empresa se sincroniza en syncUserAccess desde Functions.
-
-  return user;
+  return cred.user;
 }
 
 export async function logoutCompany() {
