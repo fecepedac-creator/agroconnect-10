@@ -78,6 +78,7 @@ const THEMES = {
 };
 
 const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) => {
+  const isUsingDemoWorkers = workers.length === 0 || workers.some(w => w.id.startsWith('d') || w.id.startsWith('g'));
   const [activeSubTab, setActiveSubTab] = useState<'ADS' | 'HISTORY'>('ADS');
   const [selectedJobId, setSelectedJobId] = useState<string>(jobs[0]?.id || '');
   const [selectedTheme, setSelectedTheme] = useState<AdTheme>('OPORTUNIDADES');
@@ -279,6 +280,11 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ company, jobs, workers = [] }) 
         <div>
           <h2 className="text-4xl font-black text-gray-900 tracking-tighter italic uppercase flex items-center gap-3">
              Ad <span className="text-emerald-500 font-normal not-italic">Studio</span>
+             {isUsingDemoWorkers && (
+               <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full">
+                 TRABAJADORES DEMO
+               </span>
+             )}
           </h2>
           <p className="text-gray-500 font-medium mt-1 tracking-tight">Marketing de Alto Impacto & Difusión Inteligente.</p>
         </div>

@@ -11,6 +11,7 @@ import {
   updateDoc,
   limit,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import {
   Briefcase,
   Image as ImageIcon,
@@ -23,7 +24,7 @@ import {
   AlertTriangle,
   Wand2,
 } from "lucide-react";
-import { db } from "../firebase";
+import { db, functions } from "../firebase";
 import { AppView, Company, JobOffer } from "../types";
 
 type PosterFormat = "post" | "story";
@@ -245,34 +246,52 @@ export default function PublishOffer({
   const requestTextIA = async () => {
     setError(null);
     if (!canSave) {
-      setError("Completa datos mínimos y guarda el borrador antes de pedir IA.");
+      setError("Completa datos mínimos antes de pedir IA.");
       return;
     }
+    
+    // Save draft first
     await saveDraft();
-    if (!jobRef) return;
-
+    
+    setAiGeneratedText("Generando texto con IA…");
+    
     try {
-      await updateDoc(jobRef, {
-        aiRequest: {
-          state: "queued",
-          requestedAt: serverTimestamp(),
-          seedNotes: aiSeedNotes || "",
-        },
-        updatedAt: serverTimestamp(),
-      } as any);
-      if (!aiGeneratedText) setAiGeneratedText("Generando texto con IA…");
-    } catch (e: any) {
-      console.error("AI text generation error:", e);
-      // Provide user-friendly error messages based on error type
-      if (e?.code === "permission-denied") {
-        setError("No tienes permisos para usar la generación de IA. Contacta al administrador.");
-      } else if (e?.code === "unavailable") {
-        setError("Servicio de IA temporalmente no disponible. Intenta más tarde.");
-      } else if (e?.message) {
-        setError(`Error al solicitar IA: ${e.message}`);
+      const generateFn = httpsCallable(functions, "generateJobDescription");
+      const context = `
+        Puesto: ${title}
+        Ubicación: ${location}
+        Pago: ${payMode} ${payAmount ? `$${payAmount}` : ""}
+        Cupos: ${workersNeeded}
+        Notas adicionales: ${aiSeedNotes || "ninguna"}
+      `;
+      
+      const result = await generateFn({ basicInfo: context });
+      const data = result.data as { ok?: boolean; text?: string };
+      
+      if (data?.text) {
+        setAiGeneratedText(data.text);
+        
+        // Also save to Firestore
+        if (jobRef) {
+          await updateDoc(jobRef, {
+            aiGeneratedText: data.text,
+            updatedAt: serverTimestamp(),
+          });
+        }
       } else {
-        setError("No se pudo solicitar generación IA. Intenta de nuevo.");
+        setError("La IA no generó texto. Intenta de nuevo.");
+        setAiGeneratedText("");
       }
+    } catch (e: any) {
+      console.error("AI generation error:", e);
+      if (e?.code === "functions/failed-precondition") {
+        setError("La IA no está configurada. Contacta al administrador.");
+      } else if (e?.code === "functions/permission-denied") {
+        setError("No tienes permisos para usar esta función.");
+      } else {
+        setError(e?.message || "No se pudo generar texto con IA.");
+      }
+      setAiGeneratedText("");
     }
   };
 
