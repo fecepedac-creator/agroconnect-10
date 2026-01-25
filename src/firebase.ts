@@ -71,28 +71,97 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
  * - Si no coincide => role=worker (por defecto)
  *
  * Esta lógica corre del lado servidor (Cloud Function) para NO depender de reglas ni exponer privilegios.
+ * 
+ * IMPORTANTE: Esta función también actualiza los custom claims del token de Auth.
+ * Después de llamarla, se hace un refresh automático del token para obtener los claims actualizados.
  */
 export async function syncUserAccess(): Promise<{
   ok: boolean;
   role: "company_admin" | "worker" | "none";
   companyId: string | null;
+  claimsUpdated?: boolean;
 }> {
   const fn = httpsCallable(functions, "syncUserAccess");
   const res = await fn({});
-  return res.data as any;
+  const data = res.data as {
+    ok: boolean;
+    role: "company_admin" | "worker" | "none";
+    companyId: string | null;
+    claimsUpdated?: boolean;
+  };
+  
+  // Force token refresh to get updated claims
+  if (data.ok && auth.currentUser) {
+    try {
+      await auth.currentUser.getIdToken(true);
+      console.info("[Auth] Token refreshed after syncUserAccess - claims updated");
+    } catch (e) {
+      console.warn("[Auth] Failed to refresh token after syncUserAccess:", e);
+    }
+  }
+  
+  return data;
 }
 
+/**
+ * Setea claims de superadmin si el email está en la allowlist del servidor.
+ * 
+ * IMPORTANTE: Esta función actualiza los custom claims del token de Auth.
+ * Después de llamarla, se hace un refresh automático del token para obtener los claims actualizados.
+ */
 export async function syncSuperadminClaims(): Promise<{ ok: boolean }> {
   const fn = httpsCallable(functions, "syncSuperadminClaims");
   const res = await fn({});
-  return res.data as any;
+  const data = res.data as { ok: boolean };
+  
+  // Force token refresh to get updated claims
+  if (data.ok && auth.currentUser) {
+    try {
+      await auth.currentUser.getIdToken(true);
+      console.info("[Auth] Token refreshed after syncSuperadminClaims - claims updated");
+    } catch (e) {
+      console.warn("[Auth] Failed to refresh token after syncSuperadminClaims:", e);
+    }
+  }
+  
+  return data;
 }
 
+/**
+ * Permite agregar o quitar permisos de superadmin a un usuario por email.
+ * Solo puede ser ejecutado por un superadmin existente.
+ * 
+ * IMPORTANTE: Esta función actualiza los custom claims del usuario objetivo.
+ * Si el usuario objetivo está autenticado actualmente, necesitará refrescar su token.
+ */
 export async function setSuperadminByEmail(
   email: string,
   makeSuperadmin = true
 ): Promise<{ ok: boolean; uid: string; email: string; superadmin: boolean }> {
   const fn = httpsCallable(functions, "setSuperadminByEmail");
   const res = await fn({ email, makeSuperadmin });
-  return res.data as any;
+  return res.data as { ok: boolean; uid: string; email: string; superadmin: boolean };
+}
+
+/**
+ * Fuerza un refresh del token de autenticación.
+ * Útil cuando se sabe que los claims han sido actualizados en el servidor.
+ * 
+ * @returns Los claims actualizados o null si no hay usuario autenticado
+ */
+export async function forceTokenRefresh(): Promise<Record<string, unknown> | null> {
+  const user = auth.currentUser;
+  if (!user) {
+    console.warn("[Auth] No authenticated user to refresh token");
+    return null;
+  }
+  
+  try {
+    const tokenResult = await user.getIdTokenResult(true);
+    console.info("[Auth] Token force-refreshed successfully");
+    return (tokenResult?.claims || {}) as Record<string, unknown>;
+  } catch (e) {
+    console.error("[Auth] Failed to force refresh token:", e);
+    throw e;
+  }
 }
