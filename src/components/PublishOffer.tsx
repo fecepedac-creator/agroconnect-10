@@ -262,7 +262,17 @@ export default function PublishOffer({
       } as any);
       if (!aiGeneratedText) setAiGeneratedText("Generando texto con IA…");
     } catch (e: any) {
-      setError(e?.message || "No se pudo solicitar generación IA.");
+      console.error("AI text generation error:", e);
+      // Provide user-friendly error messages based on error type
+      if (e?.code === "permission-denied") {
+        setError("No tienes permisos para usar la generación de IA. Contacta al administrador.");
+      } else if (e?.code === "unavailable") {
+        setError("Servicio de IA temporalmente no disponible. Intenta más tarde.");
+      } else if (e?.message) {
+        setError(`Error al solicitar IA: ${e.message}`);
+      } else {
+        setError("No se pudo solicitar generación IA. Intenta de nuevo.");
+      }
     }
   };
 
@@ -296,7 +306,17 @@ export default function PublishOffer({
         setActivePosterId(ref.id);
       }
     } catch (e: any) {
-      setError(e?.message || "No se pudo solicitar el afiche.");
+      console.error("Poster generation error:", e);
+      // Provide user-friendly error messages based on error type
+      if (e?.code === "permission-denied") {
+        setError("No tienes permisos para generar afiches. Contacta al administrador.");
+      } else if (e?.code === "unavailable") {
+        setError("Servicio de generación de afiches temporalmente no disponible. Intenta más tarde.");
+      } else if (e?.message) {
+        setError(`Error al generar afiche: ${e.message}`);
+      } else {
+        setError("No se pudo solicitar el afiche. Intenta de nuevo.");
+      }
     } finally {
       setPosterBusy(false);
     }

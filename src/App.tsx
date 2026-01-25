@@ -76,6 +76,14 @@ const App: React.FC = () => {
     (ENHANCED_DEMO_GLOBAL as any) || ENHANCED_DEMO_WORKERS || MOCK_GLOBAL_WORKERS
   );
   const [companyStats, setCompanyStats] = useState<Record<string, any> | null>(null);
+  const [globalStats, setGlobalStats] = useState<{
+    companiesTotal?: number;
+    companiesActive?: number;
+    jobsTotal?: number;
+    jobsActive?: number;
+    applicationsTotal?: number;
+    hiresTotal?: number;
+  } | null>(null);
 
   const [adminConfig, setAdminConfig] = useState<AdminConfig>({
     whatsappNumber: "+56900000000",
@@ -233,6 +241,31 @@ const App: React.FC = () => {
     );
     return () => unsub();
   }, [currentCompany?.id]);
+
+  // Subscribe to global stats for SuperAdmin
+  useEffect(() => {
+    if (userRole !== UserRole.ADMIN) {
+      setGlobalStats(null);
+      return;
+    }
+    
+    const ref = doc(db, "stats", "global");
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (snap.exists()) {
+          setGlobalStats(snap.data() as any);
+        } else {
+          setGlobalStats({});
+        }
+      },
+      (error) => {
+        console.error("Error fetching global stats:", error);
+        setGlobalStats({});
+      }
+    );
+    return () => unsub();
+  }, [userRole]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -453,7 +486,7 @@ const App: React.FC = () => {
               <NavItem view={AppView.BROADCASTS} icon={Megaphone} label="Difusiones" />
               <NavItem view={AppView.SETTINGS_COMPANY} icon={Settings} label="Ajustes" />
               <NavItem view={AppView.AI_REVIEW} icon={Bot} label="AI Review" />
-              <NavItem view={AppView.WORKER_AUTH} icon={Users} label="Worker Auth" />
+              {/* Worker Auth removed - development tool only */}
             </>
           )}
 
@@ -497,23 +530,80 @@ const App: React.FC = () => {
               onRadarClick={handleRadarClick}
               demoMode={isDemoMode}
               companyStats={companyStats}
+              globalStats={globalStats}
+              isAdmin={userRole === UserRole.ADMIN}
             />
           )}
           {currentView === AppView.WORKERS && <Workers workers={workers} setWorkers={setWorkers} />}
           {currentView === AppView.JOBS &&
-            (currentCompany ? (
+            (userRole === UserRole.ADMIN ? (
+              // SuperAdmin view with company selector
+              <div className="space-y-4">
+                <div className="bg-white p-4 rounded-xl border border-gray-100">
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    Selecciona una empresa para gestionar ofertas:
+                  </label>
+                  <select
+                    value={currentCompany?.id || ""}
+                    onChange={(e) => {
+                      const selected = companies.find(c => c.id === e.target.value);
+                      setCurrentCompany(selected || null);
+                    }}
+                    className="w-full md:w-auto px-4 py-2 border border-gray-200 rounded-xl"
+                  >
+                    <option value="">-- Seleccionar empresa --</option>
+                    {companies.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                {currentCompany ? (
+                  <Jobs jobs={jobs} setJobs={setJobs} currentCompany={currentCompany} />
+                ) : (
+                  <div className="text-sm text-gray-500 bg-gray-50 p-6 rounded-xl border border-gray-100">
+                    Selecciona una empresa para ver y gestionar sus ofertas.
+                  </div>
+                )}
+              </div>
+            ) : currentCompany ? (
               <Jobs jobs={jobs} setJobs={setJobs} currentCompany={currentCompany} />
             ) : (
               <div className="text-sm text-gray-500">Selecciona una empresa para ver las ofertas.</div>
             ))}
           {currentView === AppView.PUBLISH_OFFER && (
-            <>
-              {currentCompany ? (
-                <PublishOffer company={currentCompany} onNavigate={setCurrentView} />
-              ) : (
-                <div className="text-sm text-gray-500">Selecciona una empresa para publicar ofertas.</div>
-              )}
-            </>
+            userRole === UserRole.ADMIN ? (
+              <div className="space-y-4">
+                <div className="bg-white p-4 rounded-xl border border-gray-100">
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    Selecciona una empresa para publicar oferta:
+                  </label>
+                  <select
+                    value={currentCompany?.id || ""}
+                    onChange={(e) => {
+                      const selected = companies.find(c => c.id === e.target.value);
+                      setCurrentCompany(selected || null);
+                    }}
+                    className="w-full md:w-auto px-4 py-2 border border-gray-200 rounded-xl"
+                  >
+                    <option value="">-- Seleccionar empresa --</option>
+                    {companies.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                {currentCompany ? (
+                  <PublishOffer company={currentCompany} onNavigate={setCurrentView} />
+                ) : (
+                  <div className="text-sm text-gray-500 bg-gray-50 p-6 rounded-xl border border-gray-100">
+                    Selecciona una empresa para publicar ofertas.
+                  </div>
+                )}
+              </div>
+            ) : currentCompany ? (
+              <PublishOffer company={currentCompany} onNavigate={setCurrentView} />
+            ) : (
+              <div className="text-sm text-gray-500">Selecciona una empresa para publicar ofertas.</div>
+            )
           )}
           {currentView === AppView.ADMIN && (
             <AdminPanel

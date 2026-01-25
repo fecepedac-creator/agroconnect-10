@@ -20,6 +20,15 @@ interface DashboardProps {
     workersTotal?: number;
     workersActive?: number;
   } | null;
+  globalStats?: {
+    companiesTotal?: number;
+    companiesActive?: number;
+    jobsTotal?: number;
+    jobsActive?: number;
+    applicationsTotal?: number;
+    hiresTotal?: number;
+  } | null;
+  isAdmin?: boolean;
 }
 
 const COLORS = ['#059669', '#FBBF24', '#EF4444', '#3B82F6'];
@@ -31,13 +40,18 @@ const Dashboard: React.FC<DashboardProps> = ({
   onRadarClick,
   demoMode = false,
   companyStats = null,
+  globalStats = null,
+  isAdmin = false,
 }) => {
   const pending = workers.filter(w => w.status === WorkerStatus.PENDING).length;
   const consented = workers.filter(w => w.status === WorkerStatus.CONSENTED).length;
   const rejected = workers.filter(w => w.status === WorkerStatus.REJECTED).length;
   const active = workers.filter(w => w.status === WorkerStatus.ACTIVE).length;
-  const workersTotal = companyStats?.workersTotal ?? workers.length;
-  const workersActive = companyStats?.workersActive ?? active;
+  
+  // Use globalStats for admin, companyStats for company users
+  const stats = isAdmin ? globalStats : companyStats;
+  const workersTotal = stats?.workersTotal ?? workers.length;
+  const workersActive = stats?.workersActive ?? active;
 
   const statusData = [
     { name: 'Consentido', value: consented },
@@ -48,7 +62,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const totalWorkersNeeded = jobs.reduce((acc, job) => acc + job.workersNeeded, 0);
   const totalWorkersFilled = jobs.reduce((acc, job) => acc + job.workersFilled, 0);
-  const activeJobsCount = companyStats?.jobsActive ?? jobs.filter(j => j.isActive).length;
+  const activeJobsCount = stats?.jobsActive ?? jobs.filter(j => j.isActive).length;
 
   return (
     <div className="space-y-6 animate-fade-in w-full">
@@ -58,6 +72,11 @@ const Dashboard: React.FC<DashboardProps> = ({
            {demoMode && (
              <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                DEMO
+             </span>
+           )}
+           {isAdmin && stats === null && (
+             <span className="text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
+               Cargando...
              </span>
            )}
          </div>

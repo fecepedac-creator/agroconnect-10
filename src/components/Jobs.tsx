@@ -116,6 +116,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
     }
 
     setIsGenerating(true);
+    setNotice(null);
     
     // Construimos un contexto rico para que la IA genere una mejor descripción
     const context = `
@@ -133,10 +134,23 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
       setNewJob(prev => ({ ...prev, description: result }));
       if (result.toLowerCase().includes("no se pudo")) {
         setNotice({ type: 'error', message: result });
+      } else {
+        setNotice({ type: 'success', message: "Descripción generada con IA exitosamente." });
       }
-    } catch (error) {
-      console.error(error);
-      setNotice({ type: 'error', message: "Hubo un problema generando la descripción con IA." });
+    } catch (error: any) {
+      console.error("AI generation error:", error);
+      // Provide user-friendly error messages based on error type
+      if (error?.code === "functions/failed-precondition") {
+        setNotice({ type: 'error', message: "La IA no está configurada. Contacta al administrador." });
+      } else if (error?.code === "functions/permission-denied") {
+        setNotice({ type: 'error', message: "No tienes permisos para usar esta función." });
+      } else if (error?.code === "functions/unavailable") {
+        setNotice({ type: 'error', message: "Servicio de IA temporalmente no disponible. Intenta más tarde." });
+      } else if (error?.message) {
+        setNotice({ type: 'error', message: `Error de IA: ${error.message}` });
+      } else {
+        setNotice({ type: 'error', message: "Hubo un problema generando la descripción con IA. Intenta de nuevo." });
+      }
     } finally {
       setIsGenerating(false);
     }
