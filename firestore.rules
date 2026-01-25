@@ -63,8 +63,8 @@ service cloud.firestore {
     }
 
     function userUpdateKeepsRoleAndCompany() {
-      return request.resource.data.role == resource.data.role
-        && request.resource.data.companyId == resource.data.companyId;
+      return request.resource.data.get('role', null) == resource.data.get('role', null)
+        && request.resource.data.get('companyId', null) == resource.data.get('companyId', null);
     }
 
     function isMyCompany(companyId) {
@@ -76,7 +76,8 @@ service cloud.firestore {
        ====================== */
 
     function isPublicDoc() {
-      return (resource.data.isPublic == true) || (resource.data.public == true);
+      return resource != null 
+        && ((resource.data.isPublic == true) || (resource.data.public == true));
     }
 
     /* ======================
@@ -84,10 +85,10 @@ service cloud.firestore {
        ====================== */
 
     function companyUpdateKeepsCriticalFields() {
-      return request.resource.data.adminEmail == resource.data.adminEmail
-        && request.resource.data.rut == resource.data.rut
-        && request.resource.data.subscriptionPlan == resource.data.subscriptionPlan
-        && request.resource.data.status == resource.data.status;
+      return request.resource.data.get('adminEmail', null) == resource.data.get('adminEmail', null)
+        && request.resource.data.get('rut', null) == resource.data.get('rut', null)
+        && request.resource.data.get('subscriptionPlan', null) == resource.data.get('subscriptionPlan', null)
+        && request.resource.data.get('status', null) == resource.data.get('status', null);
     }
 
     /* ======================
@@ -118,7 +119,7 @@ service cloud.firestore {
 
     match /publicJobs/{publicJobId} {
       allow read: if true;
-      allow write: if isSuperAdmin();
+      allow write: if false;  // Only Cloud Functions via Admin SDK
     }
 
     match /publicWorkers/{workerId} {
@@ -149,6 +150,11 @@ service cloud.firestore {
       allow read, write: if isSuperAdmin();
     }
 
+    match /admin_audit/{auditId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;  // Only Cloud Functions via Admin SDK
+    }
+
     /* ======================
        WORKERS
        ====================== */
@@ -163,7 +169,7 @@ service cloud.firestore {
       allow update: if signedIn()
         && uid == myUid()
         && userUpdateKeepsRoleAndCompany();
-      allow delete: if false;
+      allow delete: if isSuperAdmin();
 
       match /applications/{appId} {
         allow read, write: if signedIn() && uid == myUid();
@@ -175,7 +181,7 @@ service cloud.firestore {
     }
 
     match /worker_usernames/{rut} {
-      allow read: if true;
+      allow read: if signedIn();
       allow create, update: if signedIn()
         && request.resource.data.uid == myUid()
         && request.resource.data.email is string
@@ -204,7 +210,7 @@ service cloud.firestore {
 
         allow read: if isSuperAdmin()
                     || isMyCompany(companyId)
-                    || isWorker();
+                    || (isWorker() && resource.data.get('isActive', false) == true);
 
         allow create, update: if isSuperAdmin() || isMyCompany(companyId);
         allow delete: if isSuperAdmin() || isMyCompany(companyId);
@@ -232,8 +238,8 @@ service cloud.firestore {
         match /attendance/{shiftId} {
 
           allow read: if isSuperAdmin()
-                      || isMyCompany(companyId)
-                      || isWorker();
+                      || isMyCompany(companyId);
+          // Workers can only read their own entries via the nested entries rule
 
           match /entries/{workerId} {
 
