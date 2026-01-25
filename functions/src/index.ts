@@ -3,6 +3,7 @@ import {
   onDocumentCreated,
   onDocumentUpdated,
 } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { defineSecret } from "firebase-functions/params";
 import nodemailer from "nodemailer";
 
@@ -22,14 +23,12 @@ const DEFAULT_FROM_NAME = "AgroConnect";
 const SUPERADMIN_EMAILS = ["fecepedac@gmail.com"];
 
 function isSuperAdminToken(token: any): boolean {
-  const email = String(token?.email || "").toLowerCase();
   const role = String(token?.role || "").toLowerCase();
   return (
     token?.admin === true ||
     token?.superadmin === true ||
     role === "admin" ||
-    role === "superadmin" ||
-    SUPERADMIN_EMAILS.includes(email)
+    role === "superadmin"
   );
 }
 
@@ -39,6 +38,16 @@ async function assertAuthenticated(request: any) {
     throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
   }
   return user;
+}
+
+function normalizeEmail(input: unknown): string {
+  return String(input || "")
+    .trim()
+    .toLowerCase();
+}
+
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 async function getUserRole(uid: string): Promise<string> {
@@ -155,6 +164,112 @@ export const syncUserAccess = onCall(async (request) => {
 
 /**
  * =========================
+ *  SUPERADMIN CLAIMS (Callable)
+ * =========================
+ * Setea claims admin/superadmin si el email está en allowlist server-side.
+ */
+export const syncSuperadminClaims = onCall(async (request) => {
+  const user = await assertAuthenticated(request);
+  const email = normalizeEmail(user.token.email);
+  if (!SUPERADMIN_EMAILS.includes(email)) {
+    throw new HttpsError("permission-denied", "No tienes permisos de SuperAdmin.");
+  }
+
+  const auth = admin.auth();
+  const current = await auth.getUser(user.uid);
+  const existingClaims = current.customClaims || {};
+  const nextClaims = {
+    ...existingClaims,
+    admin: true,
+    superadmin: true,
+    role: "superadmin",
+  };
+
+  await auth.setCustomUserClaims(user.uid, nextClaims);
+  await db.collection("users").doc(user.uid).set(
+    {
+      role: "superadmin",
+      email,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return { ok: true };
+});
+
+/**
+ * =========================
+ *  SUPERADMIN CLAIMS (Callable)
+ * =========================
+ * Permite agregar/quitar superadmin por email.
+ */
+export const setSuperadminByEmail = onCall(async (request) => {
+  const user = await assertAuthenticated(request);
+  const callerEmail = normalizeEmail(user.token.email);
+  const callerIsSuperadmin = isSuperAdminToken(user.token);
+
+  if (!callerIsSuperadmin && !SUPERADMIN_EMAILS.includes(callerEmail)) {
+    throw new HttpsError("permission-denied", "No tienes permisos para gestionar superadmins.");
+  }
+
+  const targetEmail = normalizeEmail(request.data?.email);
+  if (!targetEmail || !isValidEmail(targetEmail)) {
+    throw new HttpsError("invalid-argument", "Email inválido.");
+  }
+
+  const makeSuperadmin = request.data?.makeSuperadmin !== false;
+
+  let targetUser;
+  try {
+    targetUser = await admin.auth().getUserByEmail(targetEmail);
+  } catch (error) {
+    throw new HttpsError("not-found", "No se encontró un usuario con ese email.");
+  }
+
+  const existingClaims = targetUser.customClaims || {};
+  const nextClaims: Record<string, any> = { ...existingClaims };
+
+  if (makeSuperadmin) {
+    nextClaims.admin = true;
+    nextClaims.superadmin = true;
+    nextClaims.role = "superadmin";
+  } else {
+    delete nextClaims.admin;
+    delete nextClaims.superadmin;
+    if (nextClaims.role === "superadmin") {
+      nextClaims.role = "worker";
+    }
+  }
+
+  await admin.auth().setCustomUserClaims(targetUser.uid, nextClaims);
+
+  await db
+    .collection("users")
+    .doc(targetUser.uid)
+    .set(
+      {
+        email: targetEmail,
+        role: makeSuperadmin ? "superadmin" : "worker",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+  await db.collection("admin_audit").add({
+    action: makeSuperadmin ? "grant_superadmin" : "revoke_superadmin",
+    targetUid: targetUser.uid,
+    targetEmail,
+    performedByUid: user.uid,
+    performedByEmail: callerEmail,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, uid: targetUser.uid, email: targetEmail, superadmin: makeSuperadmin };
+});
+
+/**
+ * =========================
  *  STATS / AGGREGATIONS
  * =========================
  *
@@ -184,10 +299,12 @@ function normalizeJobStatus(raw: any): "future" | "active" | "closed" {
   return "future";
 }
 
-function normalizeCompanyStatus(raw: any): "Active" | "Pending" | "Suspended" | "Overdue" {
-  const s = String(raw || "Active");
-  if (s === "Pending" || s === "Suspended" || s === "Overdue" || s === "Active") return s;
-  return "Active";
+function normalizeCompanyStatus(raw: any): "active" | "pending" | "suspended" | "overdue" {
+  const s = String(raw || "active").toLowerCase();
+  if (s === "pending") return "pending";
+  if (s === "suspended") return "suspended";
+  if (s === "overdue") return "overdue";
+  return "active";
 }
 
 function normalizeApplicationStatus(raw: any): "applied" | "hired" | "rejected" | "other" {
@@ -243,9 +360,10 @@ export const onCompanyCreated = onDocumentCreated("companies/{companyId}", async
     companiesTotal: 1,
   };
 
-  if (status === "Active") globalFields.companiesActive = 1;
-  if (status === "Overdue") globalFields.companiesOverdue = 1;
-  if (status === "Suspended") globalFields.companiesSuspended = 1;
+  if (status === "active") globalFields.companiesActive = 1;
+  if (status === "overdue") globalFields.companiesOverdue = 1;
+  if (status === "suspended") globalFields.companiesSuspended = 1;
+  if (status === "pending") globalFields.companiesPending = 1;
 
   await incGlobal(globalFields);
 });
@@ -264,10 +382,10 @@ export const onCompanyUpdated = onDocumentUpdated("companies/{companyId}", async
 
   const fields: Record<string, number> = {};
   const map: Record<string, string> = {
-    Active: "companiesActive",
-    Overdue: "companiesOverdue",
-    Suspended: "companiesSuspended",
-    Pending: "companiesPending",
+    active: "companiesActive",
+    overdue: "companiesOverdue",
+    suspended: "companiesSuspended",
+    pending: "companiesPending",
   };
 
   const bKey = map[b];
@@ -633,7 +751,7 @@ export const runOperationalAudit = onCall(
 
     const dataQualityNotes: string[] = [];
     const totalCompaniesActive =
-      (await safeCount(db.collection("companies").where("status", "in", ["active", "Active"]))) ?? 0;
+      (await safeCount(db.collection("companies").where("status", "==", "active"))) ?? 0;
 
     let totalJobsActive = await safeCount(db.collectionGroup("jobs").where("isActive", "==", true));
     if (totalJobsActive === null || totalJobsActive === 0) {
@@ -656,7 +774,7 @@ export const runOperationalAudit = onCall(
     }
 
     const overdueCompanies = await safeCount(
-      db.collection("companies").where("status", "in", ["overdue", "Overdue"])
+      db.collection("companies").where("status", "==", "overdue")
     );
     if (overdueCompanies === null) {
       dataQualityNotes.push("No hay señal clara de morosidad disponible.");
@@ -1012,3 +1130,32 @@ export const sendEmailFromOutbox = onDocumentCreated(
     }
   }
 );
+
+/**
+ * =========================
+ *  COMMS OUTBOX WATCHDOG
+ * =========================
+ * Marca como error los mensajes en "sending" que quedaron colgados.
+ */
+export const commsOutboxWatchdog = onSchedule("every 10 minutes", async () => {
+  const cutoffMs = Date.now() - 15 * 60 * 1000;
+  const cutoff = admin.firestore.Timestamp.fromMillis(cutoffMs);
+  const snap = await db
+    .collection("comms_outbox")
+    .where("status", "==", "sending")
+    .where("sendingAt", "<", cutoff)
+    .limit(50)
+    .get();
+
+  if (snap.empty) return;
+
+  const batch = db.batch();
+  snap.docs.forEach((docSnap) => {
+    batch.update(docSnap.ref, {
+      status: "error",
+      error: "watchdog_timeout",
+      failedAt: FieldValue.serverTimestamp(),
+    });
+  });
+  await batch.commit();
+});

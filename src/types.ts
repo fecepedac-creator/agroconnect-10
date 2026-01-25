@@ -79,6 +79,7 @@ export interface JobOffer {
   isActive: boolean;
   qrCodeUrl?: string;
   jobStatus?: 'future' | 'active' | 'closed';
+  publishPublic?: boolean;
   // Enhanced Fields
   category?: 'Cosecha' | 'Packing' | 'Poda' | 'Maquinaria' | 'Otros';
   paymentType?: 'Al Día' | 'Semanal' | 'Quincenal' | 'Por Kilo';
@@ -94,15 +95,7 @@ export interface Company {
   id: string;
   name: string;
   subscriptionPlan: 'Basic' | 'Pro' | 'Enterprise';
-  status?:
-    | 'Active'
-    | 'Overdue'
-    | 'Pending'
-    | 'Suspended'
-    | 'active'
-    | 'inactive'
-    | 'pending'
-    | 'suspended';
+  status?: 'active' | 'pending' | 'suspended' | 'overdue' | 'inactive';
   isPublic?: boolean;
   contactEmail: string;
   logoUrl?: string;

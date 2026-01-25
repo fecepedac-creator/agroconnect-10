@@ -15,7 +15,7 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
-import { db, auth, functions } from "../firebase";
+import { auth, db, debugAuthClaims, functions, setSuperadminByEmail } from "../firebase";
 import {
   AlertTriangle,
   Briefcase,
@@ -42,7 +42,7 @@ import {
  */
 
 type SubscriptionPlan = "Basic" | "Pro" | "Enterprise";
-type CompanyStatus = "Active" | "Pending" | "Suspended" | "Overdue";
+type CompanyStatus = "active" | "pending" | "suspended" | "overdue";
 
 type Address = {
   line1?: string;
@@ -209,6 +209,14 @@ type CommsOutboxDoc = {
   errorMessage?: string;
 };
 
+type AuthDebugPayload = {
+  email: string | null;
+  uid: string | null;
+  claims: Record<string, unknown>;
+  issuedAt: string | null;
+  expiresAt: string | null;
+};
+
 // --------- Helpers UI ---------
 const inputBase =
   "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-400";
@@ -226,13 +234,13 @@ function Badge({ children }: { children: React.ReactNode }) {
 
 function statusLabel(s?: CompanyStatus) {
   switch (s) {
-    case "Overdue":
+    case "overdue":
       return "Morosa";
-    case "Suspended":
+    case "suspended":
       return "Suspendida";
-    case "Pending":
+    case "pending":
       return "Pendiente";
-    case "Active":
+    case "active":
     default:
       return "Pagos al día";
   }
@@ -240,13 +248,13 @@ function statusLabel(s?: CompanyStatus) {
 
 function statusPillClasses(s?: CompanyStatus) {
   switch (s) {
-    case "Overdue":
+    case "overdue":
       return "border-red-300 bg-red-100 text-red-800 font-semibold";
-    case "Suspended":
+    case "suspended":
       return "border-gray-300 bg-gray-100 text-gray-700";
-    case "Pending":
+    case "pending":
       return "border-amber-200 bg-amber-50 text-amber-800";
-    case "Active":
+    case "active":
     default:
       return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
@@ -258,7 +266,7 @@ function StatusBadge({ status }: { status?: CompanyStatus }) {
       className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${statusPillClasses(
         status
       )}`}
-      title={status || "Active"}
+      title={status || "active"}
     >
       {statusLabel(status)}
     </span>
@@ -490,13 +498,50 @@ export default function AdminPanel(props: AdminPanelProps) {
 
   const [adminEmail, setAdminEmail] = useState("");
   const [plan, setPlan] = useState<SubscriptionPlan>("Basic");
-  const [status, setStatus] = useState<CompanyStatus>("Active");
+  const [status, setStatus] = useState<CompanyStatus>("active");
   const [isPublic, setIsPublic] = useState(true);
+  const [authDebug, setAuthDebug] = useState<AuthDebugPayload | null>(null);
+  const [authDebugLoading, setAuthDebugLoading] = useState(false);
+  const [authDebugError, setAuthDebugError] = useState<string | null>(null);
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
+  const [superadminEmail, setSuperadminEmail] = useState("");
+  const [superadminLoading, setSuperadminLoading] = useState(false);
+  const [superadminMessage, setSuperadminMessage] = useState<{ type: "success" | "error"; text: string } | null>(
+    null
+  );
+
+  const isDev = import.meta.env.DEV;
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setMe(u));
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (!me) {
+      setIsSuperadmin(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    me.getIdTokenResult()
+      .then((token) => {
+        if (!active) return;
+        const role = String(token?.claims?.role || "").toLowerCase();
+        const superadmin = token?.claims?.superadmin === true || role === "superadmin";
+        setIsSuperadmin(superadmin);
+      })
+      .catch(() => {
+        if (!active) return;
+        setIsSuperadmin(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [me]);
 
   // --------- Firestore subscriptions ---------
   useEffect(() => {
@@ -511,7 +556,7 @@ export default function AdminPanel(props: AdminPanelProps) {
             id: d.id,
             name: data.name || "(sin nombre)",
             subscriptionPlan: (data.subscriptionPlan || "Basic") as SubscriptionPlan,
-            status: (data.status || "Active") as CompanyStatus,
+            status: (data.status || "active") as CompanyStatus,
             contactEmail: data.contactEmail || "",
             adminEmail: data.adminEmail || "",
             rut: data.rut || "",
@@ -718,9 +763,9 @@ export default function AdminPanel(props: AdminPanelProps) {
   const effectiveGlobal = useMemo(() => {
     // Fallback: si stats aún no están creadas, estimar con companies list.
     const fallbackCompaniesTotal = companies.length;
-    const fallbackActive = companies.filter((c) => (c.status || "Active") === "Active").length;
-    const fallbackOverdue = companies.filter((c) => (c.status || "") === "Overdue").length;
-    const fallbackSuspended = companies.filter((c) => (c.status || "") === "Suspended").length;
+    const fallbackActive = companies.filter((c) => (c.status || "active") === "active").length;
+    const fallbackOverdue = companies.filter((c) => (c.status || "") === "overdue").length;
+    const fallbackSuspended = companies.filter((c) => (c.status || "") === "suspended").length;
 
     return {
       companiesTotal: clampInt(globalStats?.companiesTotal, fallbackCompaniesTotal),
@@ -899,7 +944,7 @@ export default function AdminPanel(props: AdminPanelProps) {
       // (Opcional/MVP) si registras una factura vencida, marcamos la empresa como morosa
       if (billingType === "invoice" && status === "overdue") {
         await updateDoc(doc(db, "companies", selectedCompanyId), {
-          status: "Overdue",
+          status: "overdue",
           updatedAt: serverTimestamp(),
         } as any);
       }
@@ -1017,7 +1062,7 @@ export default function AdminPanel(props: AdminPanelProps) {
 
     setAdminEmail(data.adminEmail || "");
     setPlan((data.subscriptionPlan || "Basic") as SubscriptionPlan);
-    setStatus((data.status || "Active") as CompanyStatus);
+    setStatus((data.status || "active") as CompanyStatus);
     setIsPublic(Boolean(data.isPublic ?? false));
 
     setModalOpen(true);
@@ -1582,7 +1627,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                   <div className="font-semibold text-gray-900 truncate">{c.name}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <Badge>{c.subscriptionPlan || "Basic"}</Badge>
-                    <StatusBadge status={(c.status as any) || "Active"} />
+                    <StatusBadge status={c.status || "active"} />
                     {c.region ? <Badge>{c.region}</Badge> : null}
                     {c.industry ? <span className="text-xs text-gray-600 truncate">{c.industry}</span> : null}
                   </div>
@@ -1662,7 +1707,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                   <div className="text-lg font-extrabold text-gray-900">{selectedCompanyDoc.name}</div>
                   <div className="flex flex-wrap gap-2">
                     <Badge>{selectedCompanyDoc.subscriptionPlan || "Basic"}</Badge>
-                    <StatusBadge status={(selectedCompanyDoc.status as any) || "Active"} />
+                    <StatusBadge status={selectedCompanyDoc.status || "active"} />
                     {selectedCompanyDoc.rut ? <Badge>{selectedCompanyDoc.rut}</Badge> : null}
                     {selectedCompanyDoc.address?.region ? <Badge>{selectedCompanyDoc.address.region}</Badge> : null}
                   </div>
@@ -1708,7 +1753,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                         try {
                           if (!selectedCompanyId) return;
                           await updateDoc(doc(db, "companies", selectedCompanyId), {
-                            status: "Overdue",
+                            status: "overdue",
                             updatedAt: serverTimestamp(),
                           } as any);
                           notify("success", "Empresa marcada como morosa.");
@@ -1726,7 +1771,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                         try {
                           if (!selectedCompanyId) return;
                           await updateDoc(doc(db, "companies", selectedCompanyId), {
-                            status: "Active",
+                            status: "active",
                             updatedAt: serverTimestamp(),
                           } as any);
                           notify("success", "Empresa marcada al día.");
@@ -2148,6 +2193,133 @@ export default function AdminPanel(props: AdminPanelProps) {
             </div>
           </div>
         </div>
+
+        {isSuperadmin ? (
+          <div className="rounded-2xl border border-gray-200 p-4 space-y-3">
+            <div>
+              <div className="font-semibold text-gray-900">Gestionar Superadmins</div>
+              <div className="text-xs text-gray-600">Agrega o quita permisos por email.</div>
+            </div>
+            <div className="flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                className={inputBase}
+                value={superadminEmail}
+                onChange={(e) => setSuperadminEmail(e.target.value)}
+                placeholder="superadmin@agroconnect.cl"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    const email = superadminEmail.trim().toLowerCase();
+                    if (!email) {
+                      setSuperadminMessage({ type: "error", text: "Ingresa un email válido." });
+                      return;
+                    }
+                    setSuperadminLoading(true);
+                    setSuperadminMessage(null);
+                    try {
+                      await setSuperadminByEmail(email, true);
+                      setSuperadminMessage({ type: "success", text: "Superadmin agregado correctamente." });
+                    } catch (error: any) {
+                      setSuperadminMessage({
+                        type: "error",
+                        text: error?.message || "No se pudo agregar el superadmin.",
+                      });
+                    } finally {
+                      setSuperadminLoading(false);
+                    }
+                  }}
+                  disabled={superadminLoading}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 disabled:opacity-70"
+                >
+                  Agregar
+                </button>
+                <button
+                  onClick={async () => {
+                    const email = superadminEmail.trim().toLowerCase();
+                    if (!email) {
+                      setSuperadminMessage({ type: "error", text: "Ingresa un email válido." });
+                      return;
+                    }
+                    setSuperadminLoading(true);
+                    setSuperadminMessage(null);
+                    try {
+                      await setSuperadminByEmail(email, false);
+                      setSuperadminMessage({ type: "success", text: "Superadmin removido correctamente." });
+                    } catch (error: any) {
+                      setSuperadminMessage({
+                        type: "error",
+                        text: error?.message || "No se pudo remover el superadmin.",
+                      });
+                    } finally {
+                      setSuperadminLoading(false);
+                    }
+                  }}
+                  disabled={superadminLoading}
+                  className="px-4 py-2 rounded-xl bg-gray-900 text-white text-xs font-bold hover:bg-black disabled:opacity-70"
+                >
+                  Quitar
+                </button>
+              </div>
+            </div>
+            {superadminMessage ? (
+              <div
+                className={
+                  "text-xs rounded-xl px-3 py-2 " +
+                  (superadminMessage.type === "success"
+                    ? "text-emerald-700 bg-emerald-50 border border-emerald-200"
+                    : "text-rose-700 bg-rose-50 border border-rose-200")
+                }
+              >
+                {superadminMessage.text}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {isDev && isSuperadmin ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+            <div>
+              <div className="font-semibold text-gray-900">Auth Debug</div>
+              <div className="text-xs text-gray-600">
+                Disponible solo en desarrollo para superadmin.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={async () => {
+                  setAuthDebugLoading(true);
+                  setAuthDebugError(null);
+                  try {
+                    const payload = await debugAuthClaims();
+                    if (!payload) {
+                      setAuthDebug(null);
+                      setAuthDebugError("No hay usuario autenticado o modo producción.");
+                      return;
+                    }
+                    setAuthDebug(payload);
+                  } catch (error) {
+                    setAuthDebugError("No se pudieron cargar los claims.");
+                  } finally {
+                    setAuthDebugLoading(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-gray-900 text-white text-xs font-bold hover:bg-black disabled:opacity-70"
+                disabled={authDebugLoading}
+              >
+                {authDebugLoading ? "Cargando..." : "Refrescar claims"}
+              </button>
+              {authDebugError ? <span className="text-xs text-rose-600">{authDebugError}</span> : null}
+            </div>
+            {authDebug ? (
+              <pre className="whitespace-pre-wrap text-xs text-gray-800 bg-white border border-amber-200 rounded-xl p-3 overflow-x-auto">
+                {JSON.stringify(authDebug, null, 2)}
+              </pre>
+            ) : (
+              <div className="text-xs text-gray-500">Sin datos aún.</div>
+            )}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -2693,7 +2865,7 @@ function TopCompaniesList({ companies }: { companies: CompanyRow[] }) {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <StatusBadge status={(c.status as any) || "Active"} />
+              <StatusBadge status={c.status || "active"} />
             </div>
           </div>
         </div>
