@@ -23,16 +23,10 @@ const Workers: React.FC<WorkersProps> = ({ workers, setWorkers }) => {
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
   const handleImportMock = () => {
-    setIsImporting(true);
-    setTimeout(() => {
-      const newWorkers: Worker[] = [
-        { id: `new-${Date.now()}-1`, name: 'Jorge Silva', rut: '18.111.222-3', phone: '+56911112222', region: 'Maule', status: WorkerStatus.PENDING, skills: ['Poda'] },
-        { id: `new-${Date.now()}-2`, name: 'Lucía Méndez', rut: '19.333.444-5', phone: '+56933334444', region: 'O\'Higgins', status: WorkerStatus.PENDING, skills: ['Packing'] },
-      ];
-      setWorkers(prev => [...prev, ...newWorkers]);
-      setIsImporting(false);
-      setNotice({ type: 'success', message: 'Datos importados correctamente desde Google Sheets' });
-    }, 1500);
+    setNotice({ 
+      type: 'info', 
+      message: 'Importación desde Google Sheets próximamente. Por ahora, los trabajadores se registran desde el portal público.' 
+    });
   };
 
   const toggleSelectWorker = (id: string) => {

@@ -1,15 +1,24 @@
 
 import React, { useState, useEffect } from 'react';
-import { Worker, WorkerStatus } from '../types';
+import { Worker, WorkerStatus, Company } from '../types';
 import { calculateDistance, getCurrentPosition } from '../services/geolocationService';
 import { Search, MapPin, UserPlus, Filter, Sliders, Map as MapIcon, CheckCircle2 } from 'lucide-react';
 
 interface GlobalSearchProps {
   onInviteWorker: (worker: Worker) => void;
   globalWorkers: Worker[];
+  isLoading?: boolean;
+  isDemo?: boolean;
+  currentCompany?: Company | null;
 }
 
-const GlobalSearch: React.FC<GlobalSearchProps> = ({ onInviteWorker, globalWorkers }) => {
+const GlobalSearch: React.FC<GlobalSearchProps> = ({ 
+  onInviteWorker, 
+  globalWorkers,
+  isLoading = false,
+  isDemo = false,
+  currentCompany = null,
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [radius, setRadius] = useState<number>(50); // Default 50km
   const [selectedSkill, setSelectedSkill] = useState<string>('all');
@@ -70,18 +79,36 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ onInviteWorker, globalWorke
   }, [searchTerm, radius, selectedSkill, userLocation, globalWorkers]);
 
   const handleInvite = (worker: Worker) => {
-    setNotice(`Invitación enviada a ${worker.name}. Se notificó para que postule a tus ofertas.`);
+    if (!currentCompany) {
+      setNotice("Selecciona una empresa primero para invitar trabajadores.");
+      return;
+    }
+    
+    setNotice(`Invitación enviada a ${worker.name}. Se creó un registro para seguimiento.`);
     onInviteWorker(worker); 
   };
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div>
-         <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-           <MapIcon className="text-blue-600"/> Buscador Global de Talento
-         </h2>
-         <p className="text-gray-500 text-sm">Encuentra trabajadores disponibles fuera de tu organización.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+            <MapIcon className="text-blue-600"/> Buscador Global de Talento
+          </h2>
+          <p className="text-gray-500 text-sm">Encuentra trabajadores disponibles fuera de tu organización.</p>
+        </div>
+        {isDemo && (
+          <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full">
+            DATOS DEMO
+          </span>
+        )}
       </div>
+      
+      {isLoading && (
+        <div className="text-sm text-gray-500 bg-gray-50 border border-gray-100 rounded-2xl p-4">
+          Cargando trabajadores disponibles...
+        </div>
+      )}
 
       {notice && (
         <div className="rounded-xl border border-blue-200 bg-blue-50 text-blue-700 px-4 py-3 text-sm">

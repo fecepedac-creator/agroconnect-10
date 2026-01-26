@@ -7,6 +7,10 @@ import {
   onSnapshot,
   serverTimestamp,
   setDoc,
+  query,
+  where,
+  orderBy,
+  limit,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db, syncSuperadminClaims } from "./firebase";
@@ -76,14 +80,22 @@ const App: React.FC = () => {
   const [globalWorkers, setGlobalWorkers] = useState<Worker[]>(
     (ENHANCED_DEMO_GLOBAL as any) || ENHANCED_DEMO_WORKERS || MOCK_GLOBAL_WORKERS
   );
+  // Public workers from Firestore (for Global Search)
+  const [publicWorkers, setPublicWorkers] = useState<Worker[]>([]);
+  const [publicWorkersLoading, setPublicWorkersLoading] = useState(true);
+  
   const [companyStats, setCompanyStats] = useState<Record<string, any> | null>(null);
   const [globalStats, setGlobalStats] = useState<{
     companiesTotal?: number;
     companiesActive?: number;
+    companiesOverdue?: number;
     jobsTotal?: number;
     jobsActive?: number;
+    jobsFuture?: number;
+    jobsClosed?: number;
     applicationsTotal?: number;
     hiresTotal?: number;
+    workersTotal?: number;
   } | null>(null);
 
   const [adminConfig, setAdminConfig] = useState<AdminConfig>({
@@ -127,7 +139,8 @@ const App: React.FC = () => {
     setCurrentCompany(updated);
   };
 
-  const handleInviteWorker = (worker: Worker) => {
+  const handleInviteWorker = async (worker: Worker) => {
+    // Add to local state (existing behavior)
     setWorkers((prev) => {
       if (prev.some((item) => item.id === worker.id)) return prev;
       return [
@@ -138,6 +151,28 @@ const App: React.FC = () => {
         },
       ];
     });
+    
+    // Create invitation record in Firestore
+    if (currentCompany?.id) {
+      try {
+        await addDoc(collection(db, "companies", currentCompany.id, "worker_invitations"), {
+          workerId: worker.id,
+          workerName: worker.name,
+          workerPhone: worker.phone,
+          workerRegion: worker.region,
+          workerSkills: worker.skills,
+          status: "pending",
+          createdAt: serverTimestamp(),
+          createdBy: {
+            uid: auth.currentUser?.uid || null,
+            email: auth.currentUser?.email || null,
+          },
+        });
+        console.log(`[AgroConnect] Invitación creada para ${worker.name}`);
+      } catch (e) {
+        console.error("Error creating invitation:", e);
+      }
+    }
   };
 
   const handleRegisterLead = async (leadData: Omit<Lead, "id" | "status" | "createdAt" | "updatedAt">) => {
@@ -257,7 +292,11 @@ const App: React.FC = () => {
         if (snap.exists()) {
           setGlobalStats(snap.data() as any);
         } else {
-          setGlobalStats({});
+          // Fallback to computed stats if no document exists
+          setGlobalStats({
+            companiesTotal: 0,
+            companiesActive: 0,
+          });
         }
       },
       (error) => {
@@ -267,6 +306,47 @@ const App: React.FC = () => {
     );
     return () => unsub();
   }, [userRole]);
+
+  // Subscribe to public workers pool (for Global Search)
+  useEffect(() => {
+    setPublicWorkersLoading(true);
+    
+    // Query workers that are available (consented) and public
+    const q = query(
+      collection(db, "publicWorkers"),
+      where("isAvailable", "==", true),
+      orderBy("createdAt", "desc"),
+      limit(100)
+    );
+    
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: Worker[] = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            name: data.name || "",
+            rut: data.rut || "",
+            phone: data.phone || "",
+            region: data.region || "",
+            status: data.status || WorkerStatus.CONSENTED,
+            skills: data.skills || [],
+            coordinates: data.coordinates || null,
+          } as Worker;
+        });
+        setPublicWorkers(list);
+        setPublicWorkersLoading(false);
+      },
+      (error) => {
+        console.error("Error fetching public workers:", error);
+        // Fallback to demo data if collection doesn't exist yet
+        setPublicWorkers(ENHANCED_DEMO_GLOBAL as Worker[]);
+        setPublicWorkersLoading(false);
+      }
+    );
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -527,9 +607,9 @@ const App: React.FC = () => {
             <Dashboard
               jobs={jobs}
               workers={workers}
-              globalWorkers={globalWorkers}
+              globalWorkers={publicWorkers.length > 0 ? publicWorkers : globalWorkers}
               onRadarClick={handleRadarClick}
-              demoMode={isDemoMode}
+              demoMode={isDemoMode || publicWorkers.length === 0}
               companyStats={companyStats}
               globalStats={globalStats}
               isAdmin={userRole === UserRole.ADMIN}
@@ -588,7 +668,13 @@ const App: React.FC = () => {
             />
           )}
           {currentView === AppView.GLOBAL_SEARCH && (
-            <GlobalSearch globalWorkers={globalWorkers} onInviteWorker={handleInviteWorker} />
+            <GlobalSearch 
+              globalWorkers={publicWorkers.length > 0 ? publicWorkers : globalWorkers} 
+              onInviteWorker={handleInviteWorker}
+              isLoading={publicWorkersLoading}
+              isDemo={publicWorkers.length === 0}
+              currentCompany={currentCompany}
+            />
           )}
           {currentView === AppView.SETTINGS_COMPANY &&
             (userRole === UserRole.ADMIN ? (
