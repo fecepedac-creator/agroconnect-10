@@ -62,7 +62,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
   });
 
   // TODO: Temporary backward compatibility during migration - remove after status migration is complete
-  const isSuspended = currentCompany?.status === 'overdue' || currentCompany?.status === 'Overdue';
+  const isSuspended = currentCompany?.status === 'overdue';
 
   // --- Firestore sync: companies/{companyId}/jobs ---
   useEffect(() => {

@@ -16,6 +16,8 @@ import {
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { auth, db, debugAuthClaims, functions, setSuperadminByEmail } from "../firebase";
+import type { CompanyStatus } from "../types";
+import { normalizeCompanyStatus } from "../utils/companyStatus";
 import {
   AlertTriangle,
   Briefcase,
@@ -42,8 +44,6 @@ import {
  */
 
 type SubscriptionPlan = "Basic" | "Pro" | "Enterprise";
-type CompanyStatus = "active" | "pending" | "suspended" | "overdue";
-
 type Address = {
   line1?: string;
   city?: string | null;
@@ -235,14 +235,16 @@ function Badge({ children }: { children: React.ReactNode }) {
 function statusLabel(s?: CompanyStatus) {
   switch (s) {
     case "overdue":
-      return "Morosa";
+      return "🔴 Morosidad";
     case "suspended":
       return "Suspendida";
     case "pending":
       return "Pendiente";
+    case "inactive":
+      return "Inactiva";
     case "active":
     default:
-      return "Pagos al día";
+      return "🟢 Pagos al día";
   }
 }
 
@@ -254,6 +256,8 @@ function statusPillClasses(s?: CompanyStatus) {
       return "border-gray-300 bg-gray-100 text-gray-700";
     case "pending":
       return "border-amber-200 bg-amber-50 text-amber-800";
+    case "inactive":
+      return "border-gray-300 bg-gray-100 text-gray-700";
     case "active":
     default:
       return "border-emerald-200 bg-emerald-50 text-emerald-800";
@@ -556,7 +560,7 @@ export default function AdminPanel(props: AdminPanelProps) {
             id: d.id,
             name: data.name || "(sin nombre)",
             subscriptionPlan: (data.subscriptionPlan || "Basic") as SubscriptionPlan,
-            status: (data.status || "active") as CompanyStatus,
+            status: normalizeCompanyStatus(data.status, "active"),
             contactEmail: data.contactEmail || "",
             adminEmail: data.adminEmail || "",
             rut: data.rut || "",
@@ -1014,7 +1018,7 @@ export default function AdminPanel(props: AdminPanelProps) {
     setRegion("Maule");
     setAdminEmail("");
     setPlan("Basic");
-    setStatus("Active");
+    setStatus("active");
     setIsPublic(true);
   }
 
@@ -1062,7 +1066,7 @@ export default function AdminPanel(props: AdminPanelProps) {
 
     setAdminEmail(data.adminEmail || "");
     setPlan((data.subscriptionPlan || "Basic") as SubscriptionPlan);
-    setStatus((data.status || "active") as CompanyStatus);
+    setStatus(normalizeCompanyStatus(data.status, "active"));
     setIsPublic(Boolean(data.isPublic ?? false));
 
     setModalOpen(true);
@@ -2436,7 +2440,7 @@ export default function AdminPanel(props: AdminPanelProps) {
       {/* Modal (Create/Edit Company) */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white w-full max-w-3xl rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+          <div className="bg-white w-full md:w-[70vw] max-w-5xl rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
             <div className="p-4 border-b border-gray-200 flex items-center justify-between">
               <div className="font-semibold text-gray-900">
                 {modalMode === "create" ? "Crear nueva empresa" : "Editar empresa"}
@@ -2605,11 +2609,12 @@ export default function AdminPanel(props: AdminPanelProps) {
 
                 <div>
                   <div className={labelBase}>ESTADO</div>
-                  <select className={inputBase} value={status} onChange={(e) => setStatus(e.target.value as CompanyStatus)}>
-                    <option value="Active">Active</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Suspended">Suspended</option>
-                    <option value="Overdue">Morosa</option>
+                  <select className={inputBase} value={status} onChange={(e) => setStatus(normalizeCompanyStatus(e.target.value, "active"))}>
+                    <option value="active">Active</option>
+                    <option value="pending">Pending</option>
+                    <option value="suspended">Suspended</option>
+                    <option value="overdue">Morosa</option>
+                    <option value="inactive">Inactive</option>
                   </select>
                 </div>
 

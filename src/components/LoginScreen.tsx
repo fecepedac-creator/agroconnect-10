@@ -269,14 +269,14 @@ export default function LoginScreen({
               setError("No se encontró la empresa seleccionada. Intenta nuevamente.");
               return;
             }
-            const data = snap.data() as Company;
+            const data = snap.data() as Partial<Company> & { adminEmail?: string };
             company = {
+              ...data,
               id: snap.id,
               name: data?.name || "Empresa",
               subscriptionPlan: data?.subscriptionPlan || "Basic",
               contactEmail: data?.contactEmail || data?.adminEmail || "",
-              ...data,
-            };
+            } as Company;
           }
           onSelectRole(UserRole.COMPANY, company);
           setOpenCompanies(false);
