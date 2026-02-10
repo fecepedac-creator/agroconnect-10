@@ -91,11 +91,13 @@ export interface JobOffer {
   otherBenefits?: string; // New: For sunscreen, gloves, etc.
 }
 
+export type CompanyStatus = 'active' | 'pending' | 'suspended' | 'overdue' | 'inactive';
+
 export interface Company {
   id: string;
   name: string;
   subscriptionPlan: 'Basic' | 'Pro' | 'Enterprise';
-  status?: 'active' | 'pending' | 'suspended' | 'overdue' | 'inactive';
+  status?: CompanyStatus;
   isPublic?: boolean;
   contactEmail: string;
   logoUrl?: string;

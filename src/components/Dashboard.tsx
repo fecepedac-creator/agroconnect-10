@@ -50,8 +50,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   
   // Use globalStats for admin, companyStats for company users
   const stats = isAdmin ? globalStats : companyStats;
-  const workersTotal = stats?.workersTotal ?? workers.length;
-  const workersActive = stats?.workersActive ?? active;
+  const workersTotal = companyStats?.workersTotal ?? workers.length;
+  const workersActive = companyStats?.workersActive ?? active;
 
   const statusData = [
     { name: 'Consentido', value: consented },

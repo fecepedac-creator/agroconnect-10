@@ -328,6 +328,38 @@ service cloud.firestore {
       allow write: if false;
     }
 
+
+
+    /* ======================
+       PREADMISSIONS
+       ====================== */
+
+    // Colección global legacy: bloqueada por seguridad (evitar spam/contaminación)
+    match /preadmissions/{docId} {
+      allow read, write: if false;
+    }
+
+    // Flujo público vigente por centro
+    match /centers/{centerId}/preadmissions/{docId} {
+      allow create: if request.auth == null
+        && request.resource.data.createdAt == request.time
+        && (!('centerId' in request.resource.data) || request.resource.data.centerId == centerId)
+        && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 200))
+        && (!('fullName' in request.resource.data) || (request.resource.data.fullName is string && request.resource.data.fullName.size() <= 200))
+        && (!('email' in request.resource.data) || (request.resource.data.email is string && request.resource.data.email.size() <= 200))
+        && (!('phone' in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() <= 50))
+        && (!('rut' in request.resource.data) || (request.resource.data.rut is string && request.resource.data.rut.size() <= 30))
+        && (!('reason' in request.resource.data) || (request.resource.data.reason is string && request.resource.data.reason.size() <= 500))
+        && (!('motive' in request.resource.data) || (request.resource.data.motive is string && request.resource.data.motive.size() <= 500))
+        && (!('observation' in request.resource.data) || (request.resource.data.observation is string && request.resource.data.observation.size() <= 500))
+        && (!('observations' in request.resource.data) || (request.resource.data.observations is string && request.resource.data.observations.size() <= 500))
+        && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 500));
+
+      allow read, update, delete: if isSuperAdmin()
+        || (isCompany() && resource.data.get("companyId", null) == myCompanyId())
+        || (isCompany() && resource.data.get("centerId", null) == myCompanyId());
+    }
+
     /* ======================
        DEFAULT DENY
        ====================== */

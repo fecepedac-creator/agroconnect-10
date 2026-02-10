@@ -25,7 +25,8 @@ import {
   Users,
 } from "lucide-react";
 import { db } from "../firebase";
-import { AppView, type Company, type JobOffer } from "../types";
+import { AppView, type Company, type CompanyStatus, type JobOffer } from "../types";
+import { normalizeCompanyStatus } from "../utils/companyStatus";
 
 /**
  * CompanyDashboard (Empresa)
@@ -37,8 +38,6 @@ import { AppView, type Company, type JobOffer } from "../types";
  */
 
 type SubscriptionPlan = "Basic" | "Pro" | "Enterprise";
-type CompanyStatus = "Active" | "Pending" | "Suspended" | "Overdue";
-
 type CompanyStatsDoc = {
   companyId: string;
   jobsTotal?: number;
@@ -130,27 +129,31 @@ function formatMoney(amount: number, currency: "CLP" | "USD") {
 
 function statusLabel(s?: CompanyStatus) {
   switch (s) {
-    case "Overdue":
-      return "Morosidad";
-    case "Suspended":
+    case "overdue":
+      return "🔴 Morosidad";
+    case "suspended":
       return "Suspendida";
-    case "Pending":
+    case "pending":
       return "Pendiente";
-    case "Active":
+    case "inactive":
+      return "Inactiva";
+    case "active":
     default:
-      return "Pagos al día";
+      return "🟢 Pagos al día";
   }
 }
 
 function statusPillClasses(s?: CompanyStatus) {
   switch (s) {
-    case "Overdue":
+    case "overdue":
       return "border-red-300 bg-red-100 text-red-800 font-semibold";
-    case "Suspended":
+    case "suspended":
       return "border-gray-300 bg-gray-100 text-gray-700";
-    case "Pending":
+    case "pending":
       return "border-amber-200 bg-amber-50 text-amber-800";
-    case "Active":
+    case "inactive":
+      return "border-gray-300 bg-gray-100 text-gray-700";
+    case "active":
     default:
       return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
@@ -367,7 +370,7 @@ export default function CompanyDashboard({
 
   // --- derived: account status & plan
   const plan = (companyDoc?.subscriptionPlan as SubscriptionPlan) || "Basic";
-  const status = (companyDoc?.status as CompanyStatus) || "Active";
+  const status = normalizeCompanyStatus(companyDoc?.status, "active");
 
   const nowYm = ymNow();
   const last1Ym = ymShift(nowYm, -1);
@@ -506,10 +509,10 @@ export default function CompanyDashboard({
       });
     }
 
-    if (status === "Overdue" || status === "Suspended") {
+    if (status === "overdue" || status === "suspended") {
       list.push({
         type: "warn",
-        title: status === "Overdue" ? "Cuenta con morosidad" : "Cuenta suspendida",
+        title: status === "overdue" ? "Cuenta con morosidad" : "Cuenta suspendida",
         detail: "Tu cuenta tiene restricciones por estado de pago. Revisa facturas y estado.",
         // ✅ FIX: AppView.SETTINGS -> AppView.SETTINGS_COMPANY
         action: { label: "Ver área financiera", to: AppView.SETTINGS_COMPANY },
