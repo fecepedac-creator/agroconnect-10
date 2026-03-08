@@ -42,3 +42,4 @@ if ($RequireEnvMapping -and $placeholders) {
 Pop-Location
 if ($failed) { exit 1 }
 Write-Host 'Security scan passed'
+exit 0
