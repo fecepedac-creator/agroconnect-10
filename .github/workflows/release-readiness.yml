@@ -1,0 +1,35 @@
+﻿name: Release Readiness
+
+on:
+  workflow_dispatch:
+
+jobs:
+  readiness:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run frontend checks
+        shell: pwsh
+        run: |
+          npm install
+          npm run lint
+          npm run build
+
+      - name: Run functions checks
+        shell: pwsh
+        run: |
+          Push-Location functions
+          npm install
+          npm run lint
+          npm run build
+          Pop-Location
+
+      - name: Run strict security scan
+        shell: pwsh
+        run: .\ops\security-scan.ps1 -RequireEnvMapping

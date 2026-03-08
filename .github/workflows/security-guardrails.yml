@@ -1,0 +1,22 @@
+﻿name: Security Guardrails
+
+on:
+  pull_request:
+    branches:
+      - fix/restore-agroconnect
+      - main
+      - 'release/*'
+  push:
+    branches:
+      - 'codex/*'
+      - 'release/*'
+
+jobs:
+  security-scan:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run secret and config scan
+        shell: pwsh
+        run: .\ops\security-scan.ps1
