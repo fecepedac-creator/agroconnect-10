@@ -4,7 +4,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     /* ======================
-       Helpers b√°sicos
+       Helpers b·sicos
        ====================== */
 
     function signedIn() {
@@ -25,7 +25,7 @@ service cloud.firestore {
 
     function myRole() {
       return signedIn()
-        && myUser().exists
+        && exists(/databases/$(database)/documents/users/$(myUid()))
         && myUser().data.role != null
           ? myUser().data.role
           : "none";
@@ -335,10 +335,10 @@ service cloud.firestore {
     }
 
     /* ======================
-       MENSAJER√çA / EMAIL
+       MENSAJERÕA / EMAIL
        ====================== */
 
-    // Cola de mensajes (UI ‚Üí Function / Trigger Email)
+    // Cola de mensajes (UI ? Function / Trigger Email)
     match /comms_outbox/{docId} {
       allow create: if isSuperAdmin();
       allow read: if isSuperAdmin()
@@ -346,7 +346,7 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Colecci√≥n mail (si usas Firebase Trigger Email)
+    // ColecciÛn mail (si usas Firebase Trigger Email)
     match /mail/{mailId} {
       allow read: if isSuperAdmin();
       allow write: if false;
@@ -358,12 +358,12 @@ service cloud.firestore {
        PREADMISSIONS
        ====================== */
 
-    // Colecci√≥n global legacy: bloqueada por seguridad (evitar spam/contaminaci√≥n)
+    // ColecciÛn global legacy: bloqueada por seguridad (evitar spam/contaminaciÛn)
     match /preadmissions/{docId} {
       allow read, write: if false;
     }
 
-    // Flujo p√∫blico vigente por centro
+    // Flujo p˙blico vigente por centro
     match /centers/{centerId}/preadmissions/{docId} {
       allow create: if request.auth == null
         && request.resource.data.createdAt == request.time
@@ -393,4 +393,5 @@ service cloud.firestore {
     }
   }
 }
+
 
