@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { Suspense, lazy, useEffect, useState } from "react";
 import {
   addDoc,
   collection,
@@ -30,20 +30,8 @@ import {
   PlusCircle,
 } from "lucide-react";
 
-import Dashboard from "./components/Dashboard";
-import PublishOffer from "./components/PublishOffer";
-import CompanySelector from "./components/CompanySelector";
 
-import Workers from "./components/Workers";
-import Jobs from "./components/Jobs";
-import AdminPanel from "./components/AdminPanel";
-import AIReview from "./components/AIReview";
-import WorkerPortal from "./components/WorkerPortal";
 import LoginScreen from "./components/LoginScreen";
-import GlobalSearch from "./components/GlobalSearch";
-import CompanySettings from "./components/CompanySettings";
-import Broadcasts from "./components/Broadcasts";
-import WorkerAuthScreen from "./components/WorkerAuthScreen";
 
 import { Worker, JobOffer, AppView, UserRole, Company, Lead, AdminConfig, WorkerStatus } from "./types";
 import {
@@ -55,8 +43,20 @@ import {
   DEMO_COMPANIES,
 } from "./constants";
 import { getCompanies } from "./services/companies";
-
 type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
+
+const Dashboard = lazy(() => import("./components/Dashboard"));
+const PublishOffer = lazy(() => import("./components/PublishOffer"));
+const CompanySelector = lazy(() => import("./components/CompanySelector"));
+const Workers = lazy(() => import("./components/Workers"));
+const Jobs = lazy(() => import("./components/Jobs"));
+const AdminPanel = lazy(() => import("./components/AdminPanel"));
+const AIReview = lazy(() => import("./components/AIReview"));
+const WorkerPortal = lazy(() => import("./components/WorkerPortal"));
+const GlobalSearch = lazy(() => import("./components/GlobalSearch"));
+const CompanySettings = lazy(() => import("./components/CompanySettings"));
+const Broadcasts = lazy(() => import("./components/Broadcasts"));
+const WorkerAuthScreen = lazy(() => import("./components/WorkerAuthScreen"));
 
 const App: React.FC = () => {
   const [userRole, setUserRole] = useState<UserRole | null>(null);
@@ -462,7 +462,11 @@ const App: React.FC = () => {
   }
 
   if (path.startsWith("/trabajos") || path.startsWith("/worker") || path.startsWith("/auth")) {
-    return <WorkerPortal />;
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center p-6"><div className="text-sm text-gray-500">Cargando portal...</div></div>}>
+        <WorkerPortal />
+      </Suspense>
+    );
   }
 
   const handleAdminConfigSave = async (config: AdminConfig) => {
@@ -607,6 +611,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Content */}
+        <Suspense fallback={<div className="text-sm text-gray-500">Cargando modulo...</div>}>
         <div className="p-6">
           {currentView === AppView.DASHBOARD && (
             <Dashboard
@@ -720,13 +725,15 @@ const App: React.FC = () => {
           {currentView === AppView.AI_REVIEW && <AIReview />}
           {currentView === AppView.WORKER_PORTAL && <WorkerPortal />}
           {currentView === AppView.WORKER_AUTH && (
-            <WorkerAuthScreen onSuccess={() => setCurrentView(AppView.WORKER_PORTAL)} onBack={handleLogout} />
+            <WorkerAuthScreen onSuccess={() => setCurrentView(AppView.WORKER_PORTAL)} onBack={() => void handleLogout()} />
           )}
         </div>
+        </Suspense>
       </main>
     </div>
   );
 };
 
 export default App;
+
 
