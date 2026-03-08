@@ -1,7 +1,7 @@
 {
   "name": "functions",
   "scripts": {
-    "lint": "eslint --no-warn-ignored --no-ignore src/index.ts",
+    "lint": "eslint --no-ignore src/index.ts",
     "build": "tsc",
     "build:watch": "tsc --watch",
     "serve": "npm run build && firebase emulators:start --only functions",
@@ -31,5 +31,6 @@
   },
   "private": true
 }
+
 
 
