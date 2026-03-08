@@ -12,7 +12,7 @@ import {
   orderBy,
   limit,
 } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db, syncSuperadminClaims } from "./firebase";
 
 import {
@@ -194,8 +194,13 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem("adminIntent");
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Error signing out from Firebase Auth:", error);
+    }
     setUserRole(null);
     setCurrentCompany(null);
     setCurrentView(AppView.DASHBOARD);
@@ -593,7 +598,7 @@ const App: React.FC = () => {
             <div className="text-sm text-gray-500">{currentCompany?.name}</div>
           </div>
           <button
-            onClick={handleLogout}
+            onClick={() => void handleLogout()}
             className="text-sm font-bold text-gray-500 hover:text-gray-700 flex items-center gap-2"
           >
             <LogOut size={16} />
@@ -724,3 +729,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+

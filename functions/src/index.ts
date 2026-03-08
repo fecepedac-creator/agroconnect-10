@@ -4,7 +4,7 @@ import {
   onDocumentUpdated,
 } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
-import { defineSecret } from "firebase-functions/params";
+import { defineSecret, defineString } from "firebase-functions/params";
 import nodemailer from "nodemailer";
 
 import * as admin from "firebase-admin";
@@ -20,7 +20,9 @@ const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 const GMAIL_USER = "agroconnect@gmail.com";
 const GMAIL_REPLY_TO = "fecepedac@gmail.com";
 const DEFAULT_FROM_NAME = "AgroConnect";
-const SUPERADMIN_EMAILS = ["fecepedac@gmail.com"];
+const SUPERADMIN_EMAILS_PARAM = defineString("SUPERADMIN_EMAILS", {
+  default: "fecepedac@gmail.com",
+});
 
 function isSuperAdminToken(token: any): boolean {
   const role = String(token?.role || "").toLowerCase();
@@ -49,6 +51,19 @@ function normalizeEmail(input: unknown): string {
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
+
+function getSuperadminEmails(): string[] {
+  const raw = String(SUPERADMIN_EMAILS_PARAM.value() || "").trim();
+  if (!raw) return ["fecepedac@gmail.com"];
+
+  const parsed = raw
+    .split(",")
+    .map((email) => normalizeEmail(email))
+    .filter((email) => isValidEmail(email));
+
+  return parsed.length > 0 ? parsed : ["fecepedac@gmail.com"];
+}
+
 
 async function getUserRole(uid: string): Promise<string> {
   try {
@@ -191,7 +206,8 @@ export const syncUserAccess = onCall(async (request) => {
 export const syncSuperadminClaims = onCall(async (request) => {
   const user = await assertAuthenticated(request);
   const email = normalizeEmail(user.token.email);
-  if (!SUPERADMIN_EMAILS.includes(email)) {
+  const superadminEmails = getSuperadminEmails();
+  if (!superadminEmails.includes(email)) {
     throw new HttpsError("permission-denied", "No tienes permisos de SuperAdmin.");
   }
 
@@ -229,7 +245,8 @@ export const setSuperadminByEmail = onCall(async (request) => {
   const callerEmail = normalizeEmail(user.token.email);
   const callerIsSuperadmin = isSuperAdminToken(user.token);
 
-  if (!callerIsSuperadmin && !SUPERADMIN_EMAILS.includes(callerEmail)) {
+  const superadminEmails = getSuperadminEmails();
+  if (!callerIsSuperadmin && !superadminEmails.includes(callerEmail)) {
     throw new HttpsError("permission-denied", "No tienes permisos para gestionar superadmins.");
   }
 
@@ -1179,3 +1196,4 @@ export const commsOutboxWatchdog = onSchedule("every 10 minutes", async () => {
   });
   await batch.commit();
 });
+
