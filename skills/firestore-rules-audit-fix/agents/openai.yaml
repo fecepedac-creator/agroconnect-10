@@ -1,0 +1,3 @@
+﻿interface:
+  display_name: "Firestore Rules Audit"
+  short_description: "Audita y corrige reglas Firestore"

@@ -1,0 +1,3 @@
+﻿interface:
+  display_name: "Auth Claims Hardening"
+  short_description: "Asegura roles y claims de autenticacion"

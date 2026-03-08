@@ -1,0 +1,3 @@
+﻿interface:
+  display_name: "Worker Identity Integrity"
+  short_description: "Protege identidad y mapping de trabajadores"

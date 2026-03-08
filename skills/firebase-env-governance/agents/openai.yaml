@@ -1,0 +1,3 @@
+﻿interface:
+  display_name: "Firebase Env Governance"
+  short_description: "Gobierna entornos y secretos Firebase"
