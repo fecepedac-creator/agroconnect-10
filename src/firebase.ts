@@ -90,8 +90,8 @@ export async function syncUserAccess(): Promise<{
     claimsUpdated?: boolean;
   };
   
-  // Force token refresh to get updated claims
-  if (data.ok && auth.currentUser) {
+  // Refresh token only when backend confirms custom claims update.
+  if (data.ok && data.claimsUpdated === true && auth.currentUser) {
     try {
       await auth.currentUser.getIdToken(true);
       console.info("[Auth] Token refreshed after syncUserAccess - claims updated");

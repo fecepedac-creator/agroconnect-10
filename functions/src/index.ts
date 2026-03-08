@@ -159,7 +159,27 @@ export const syncUserAccess = onCall(async (request) => {
 
   await userRef.set(payload, { merge: true });
 
-  return { ok: true, role, companyId };
+  // Keep Auth claims aligned with Firestore role/companyId.
+  // Do not degrade superadmin/admin privileges in this flow.
+  let claimsUpdated = false;
+  const callerIsSuperadmin = isSuperAdminToken(user.token);
+  if (!callerIsSuperadmin) {
+    const auth = admin.auth();
+    const current = await auth.getUser(user.uid);
+    const existingClaims = current.customClaims || {};
+    const nextClaims: Record<string, any> = {
+      ...existingClaims,
+      role,
+      companyId,
+    };
+    delete nextClaims.admin;
+    delete nextClaims.superadmin;
+
+    await auth.setCustomUserClaims(user.uid, nextClaims);
+    claimsUpdated = true;
+  }
+
+  return { ok: true, role, companyId, claimsUpdated };
 });
 
 /**
