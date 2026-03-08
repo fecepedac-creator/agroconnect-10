@@ -42,10 +42,28 @@ Cambio aplicado:
   - Dashboard, AdminPanel, Jobs, Workers, WorkerPortal, Broadcasts, etc.
 
 Build comparativo:
-- Antes: chunk principal aprox. `1,179 kB`.
-- Ahora: chunk principal aprox. `597 kB`.
-- Además se generan chunks por modulo (carga diferida).
+- Antes de lazy/manualChunks: chunk principal aprox. `1,179 kB`.
+- Con lazy load inicial: chunk principal aprox. `597 kB`.
+- Con `manualChunks` (firebase/charts/icons): chunk principal aprox. `225 kB`.
 
 Observacion:
-- Sigue warning de chunk >500kB.
-- Siguiente iteracion recomendada: `manualChunks` en `vite.config.js` para separar Firebase/Recharts.
+- Ya no aparece warning de chunk >500kB en `npm run build`.
+- Quedan separados vendors crï¿½ticos:
+  - `vendor-firebase` (~355kB)
+  - `vendor-charts` (~368kB)
+  - `vendor-icons` (~18kB)
+
+## 4) Estado de secretos y despliegue
+
+Pendiente operacional (GitHub):
+1. Cargar secrets:
+   - `FIREBASE_PROJECT_ID_DEV`
+   - `FIREBASE_PROJECT_ID_STAGING`
+   - `FIREBASE_PROJECT_ID_PROD`
+   - `SUPERADMIN_EMAILS_DEV`
+   - `SUPERADMIN_EMAILS_STAGING`
+   - `SUPERADMIN_EMAILS_PROD`
+   - `FIREBASE_SERVICE_ACCOUNT_AGROCONNECT_APP_420`
+2. Ejecutar `deploy-functions` con `workflow_dispatch` en `staging`.
+3. Verificar callable `syncSuperadminClaims` con un email incluido en `SUPERADMIN_EMAILS_STAGING`.
+
