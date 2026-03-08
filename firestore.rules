@@ -91,6 +91,29 @@ service cloud.firestore {
         && request.resource.data.get('status', null) == resource.data.get('status', null);
     }
 
+    function workerUsernameCreateIsValid(rut) {
+      return request.resource.data.uid == myUid()
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 0
+        && !exists(/databases/$(database)/documents/worker_usernames/$(rut));
+    }
+
+    function workerUsernameUpdateIsSafe() {
+      return request.resource.data.get('uid', null) == resource.data.get('uid', null)
+        && request.resource.data.get('email', null) == resource.data.get('email', null);
+    }
+
+    function workerApplicationUpdateIsSafe() {
+      return request.resource.data.get('workerId', null) == resource.data.get('workerId', null)
+        && request.resource.data.get('companyId', null) == resource.data.get('companyId', null)
+        && request.resource.data.get('jobId', null) == resource.data.get('jobId', null)
+        && request.resource.data.get('status', null) == resource.data.get('status', null)
+        && request.resource.data.get('attendanceStatus', null) == resource.data.get('attendanceStatus', null)
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && request.resource.data.get('decisionBy', null) == resource.data.get('decisionBy', null)
+        && request.resource.data.get('decisionAt', null) == resource.data.get('decisionAt', null);
+    }
+
     /* ======================
        USERS
        ====================== */
@@ -181,11 +204,11 @@ service cloud.firestore {
     }
 
     match /worker_usernames/{rut} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
-        && request.resource.data.uid == myUid()
-        && request.resource.data.email is string
-        && request.resource.data.email.size() > 0;
+      allow read: if signedIn() && resource.data.uid == myUid();
+      allow create: if signedIn() && workerUsernameCreateIsValid(rut);
+      allow update: if signedIn()
+        && resource.data.uid == myUid()
+        && workerUsernameUpdateIsSafe();
       allow delete: if false;
     }
 
@@ -229,7 +252,8 @@ service cloud.firestore {
           allow update: if isSuperAdmin()
                         || isMyCompany(companyId)
                         || (isWorker()
-                            && request.auth.uid == resource.data.workerId);
+                            && request.auth.uid == resource.data.workerId
+                            && workerApplicationUpdateIsSafe());
 
           allow delete: if isSuperAdmin();
         }
