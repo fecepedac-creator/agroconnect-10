@@ -1,4 +1,4 @@
-﻿import { readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
@@ -11,19 +11,19 @@ const APP_PATH = `companies/${COMPANY_ID}/jobs/${JOB_ID}/applications/${APP_ID}`
 let testEnv;
 
 function workerDb(uid, email) {
-  return testEnv.authenticatedContext(uid, { uid, email }).firestore();
+  return testEnv.authenticatedContext(uid, { sub: uid, email }).firestore();
 }
 
 function companyAdminDb() {
   return testEnv.authenticatedContext('companyAdminA', {
-    uid: 'companyAdminA',
+    sub: 'companyAdminA',
     email: 'companyadmin@example.com',
   }).firestore();
 }
 
 function superAdminDb() {
   return testEnv.authenticatedContext('superAdmin', {
-    uid: 'superAdmin',
+    sub: 'superAdmin',
     email: 'superadmin@example.com',
     admin: true,
     superadmin: true,
@@ -174,3 +174,4 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
+

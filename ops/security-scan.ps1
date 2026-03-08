@@ -1,8 +1,9 @@
-﻿param(
+param(
   [switch]$RequireEnvMapping
 )
 
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 
@@ -16,6 +17,13 @@ $patterns = @(
 $failed = $false
 foreach ($p in $patterns) {
   $matches = git grep -n -E -e $p -- . ':!package-lock.json' ':!functions/package-lock.json' ':!build-output/**' ':!.env.example' ':!.env.local.example'
+
+  if ($LASTEXITCODE -gt 1) {
+    Write-Host "git grep failed for pattern: $p"
+    $failed = $true
+    continue
+  }
+
   if ($LASTEXITCODE -eq 0 -and $matches) {
     Write-Host "Potential secret match for pattern: $p"
     Write-Host $matches
@@ -34,4 +42,3 @@ if ($RequireEnvMapping -and $placeholders) {
 Pop-Location
 if ($failed) { exit 1 }
 Write-Host 'Security scan passed'
-
