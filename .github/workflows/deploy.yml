@@ -1,18 +1,21 @@
-name: Deploy to Firebase Hosting
+﻿name: Deploy to Firebase Hosting
 
 on:
   push:
     branches:
-      - main  # O la rama que uses como principal
+      - main
+      - 'release/*'
 
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
@@ -21,13 +24,31 @@ jobs:
 
       - name: Build
         run: npm run build
-        env:
-          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
 
-      - name: Deploy to Firebase
+      - name: Resolve target project
+        id: target
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "project_id=${{ secrets.FIREBASE_PROJECT_ID_PROD }}" >> "$GITHUB_OUTPUT"
+            echo "channel=live" >> "$GITHUB_OUTPUT"
+          else
+            echo "project_id=${{ secrets.FIREBASE_PROJECT_ID_STAGING }}" >> "$GITHUB_OUTPUT"
+            echo "channel=live" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate target secrets
+        shell: bash
+        run: |
+          if [[ -z "${{ steps.target.outputs.project_id }}" ]]; then
+            echo "Missing Firebase project ID secret for this branch." >&2
+            exit 1
+          fi
+
+      - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: '${{ secrets.GITHUB_TOKEN }}'
           firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_AGROCONNECT_APP_420 }}'
-          channelId: live
-          projectId: agroconnect-app-420
+          channelId: '${{ steps.target.outputs.channel }}'
+          projectId: '${{ steps.target.outputs.project_id }}'

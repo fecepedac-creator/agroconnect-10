@@ -1,4 +1,4 @@
-# Logs
+﻿# Logs
 logs
 *.log
 npm-debug.log*
@@ -27,3 +27,9 @@ serviceAccountKey.json
 *.sln
 *.sw?
 .firebase/hosting.*.cache
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.local.example
