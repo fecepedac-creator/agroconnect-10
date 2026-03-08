@@ -1,0 +1,15 @@
+﻿# Default owners (adjust usernames to your GitHub team/users)
+
+# Security
+firestore.rules @fecepedac-creator
+functions/ @fecepedac-creator
+
+# Frontend product
+src/ @fecepedac-creator
+
+# CI/CD and operations
+.github/ @fecepedac-creator
+
+# Documentation
+docs/ @fecepedac-creator
+skills/ @fecepedac-creator
