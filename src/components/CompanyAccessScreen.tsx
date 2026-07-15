@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {lazy, Suspense, useState} from "react";
 import {GoogleAuthProvider, signInWithPopup, signOut} from "firebase/auth";
 import {doc, getDoc} from "firebase/firestore";
 import {ArrowLeft, Building2, CheckCircle2, LockKeyhole, ShieldCheck} from "lucide-react";
@@ -12,6 +12,10 @@ type Props = {
     message?: string;
   }>;
 };
+
+const CompanyE2eAccess = import.meta.env.MODE === "e2e" && import.meta.env.VITE_USE_FIREBASE_EMULATORS === "true"
+  ? lazy(() => import("./CompanyE2eAccess"))
+  : null;
 
 export default function CompanyAccessScreen({onAuthorized, onRegisterLead}: Props) {
   const [loading, setLoading] = useState(false);
@@ -126,6 +130,7 @@ export default function CompanyAccessScreen({onAuthorized, onRegisterLead}: Prop
               <button onClick={handleLogin} disabled={loading} className="mt-7 flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl bg-blue-700 px-6 font-black text-white transition hover:bg-blue-800 disabled:opacity-60">
                 <ShieldCheck size={21} /> {loading ? "Validando membresía..." : "Continuar con Google"}
               </button>
+              {CompanyE2eAccess && <Suspense fallback={null}><CompanyE2eAccess onAuthorized={onAuthorized} /></Suspense>}
               {auth.currentUser && error && <button onClick={handleUseAnotherAccount} className="mt-3 min-h-12 w-full rounded-2xl border border-slate-200 font-extrabold text-slate-700 hover:bg-slate-50">Usar otra cuenta Google</button>}
               <div className="my-7 h-px bg-slate-200" />
               <p className="text-center text-sm font-semibold text-slate-500">¿Tu empresa todavía no pertenece a MundoConnect?</p>

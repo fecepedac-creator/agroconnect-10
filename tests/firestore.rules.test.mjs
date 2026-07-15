@@ -177,6 +177,9 @@ async function seedBaseData() {
     await setDoc(doc(db, 'companies', COMPANY_ID, 'jobs', JOB_ID), {
       companyId: COMPANY_ID,
       title: 'Operario de bodega',
+      location: 'Talca',
+      workersNeeded: 5,
+      publishPublic: true,
       isDraft: false,
       isActive: true,
       jobStatus: 'active',
@@ -193,6 +196,9 @@ async function seedBaseData() {
     await setDoc(doc(db, 'companies', 'company_overdue', 'jobs', 'job_active'), {
       companyId: 'company_overdue',
       title: 'Oferta publicada antes de la morosidad',
+      location: 'Talca',
+      workersNeeded: 5,
+      publishPublic: true,
       isDraft: false,
       isActive: true,
       jobStatus: 'active',
@@ -526,6 +532,26 @@ async function main() {
     }));
   }));
 
+  results.push(await runCase('abuse: Worker cannot create safety reports directly', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(setDoc(doc(db, 'safety_reports', 'report_browser'), {
+      reporterUid: 'workerA',
+      companyId: COMPANY_ID,
+      jobId: JOB_ID,
+      category: 'false_offer',
+      details: 'Intento directo desde navegador',
+      status: 'open',
+    }));
+  }));
+
+  results.push(await runCase('abuse: Worker cannot forge deletion request status', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(setDoc(doc(db, 'data_deletion_requests', 'workerA'), {
+      uid: 'workerA',
+      status: 'completed',
+    }));
+  }));
+
   results.push(await runCase('legit: Active company membership grants company access', async () => {
     const db = companyDb('companyMemberA');
     await assertSucceeds(getDoc(doc(db, 'companies', COMPANY_ID)));
@@ -558,6 +584,9 @@ async function main() {
     const db = companyAdminDb();
     await assertSucceeds(setDoc(doc(db, 'companies', COMPANY_ID, 'jobs', 'job_new'), {
       title: 'Oferta permitida',
+      location: 'Talca',
+      workersNeeded: 5,
+      publishPublic: true,
       isActive: true,
       jobStatus: 'active',
     }));

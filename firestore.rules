@@ -102,8 +102,22 @@ service cloud.firestore {
         || data.get('jobStatus', '') == 'active';
     }
 
+    function publishedJobIsComplete(data) {
+      return data.get('title', '') is string
+        && data.get('title', '').size() >= 3
+        && data.get('title', '').size() <= 200
+        && data.get('location', '') is string
+        && data.get('location', '').size() >= 2
+        && data.get('location', '').size() <= 200
+        && data.get('workersNeeded', 0) is number
+        && data.get('workersNeeded', 0) > 0
+        && data.get('workersNeeded', 0) <= 500
+        && data.get('publishPublic', false) == true;
+    }
+
     function companyJobWriteIsAllowed(companyId) {
-      return !jobIsPublished(request.resource.data) || companyCanPublish(companyId);
+      return !jobIsPublished(request.resource.data)
+        || (companyCanPublish(companyId) && publishedJobIsComplete(request.resource.data));
     }
 
     function applicationCreateIsValid(companyId, jobId, workerId) {
@@ -127,7 +141,8 @@ service cloud.firestore {
         && request.resource.data.appliedAt == request.time
         && request.resource.data.createdAt == request.time
         && exists(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId))
-        && jobIsPublished(get(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId)).data);
+        && jobIsPublished(get(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId)).data)
+        && publishedJobIsComplete(get(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId)).data);
     }
 
     function companyApplicationCreateIsValid(companyId, jobId, workerId, appId) {
@@ -305,6 +320,21 @@ service cloud.firestore {
       allow write: if false;  // Only Cloud Functions via Admin SDK
     }
 
+    match /data_deletion_requests/{uid} {
+      allow read: if isSuperAdmin() || (signedIn() && uid == myUid());
+      allow write: if false;  // Only Cloud Functions via Admin SDK
+    }
+
+    match /safety_reports/{reportId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;  // Only Cloud Functions via Admin SDK
+    }
+
+    match /privacy_audit/{auditId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
     /* ======================
        WORKERS
        ====================== */
@@ -390,7 +420,9 @@ service cloud.firestore {
 
         allow read: if isSuperAdmin()
                     || isMyCompany(companyId)
-                    || (isWorker() && resource.data.get('isActive', false) == true);
+                    || (isWorker()
+                        && resource.data.get('isActive', false) == true
+                        && resource.data.get('publishPublic', false) == true);
 
         allow create, update: if isSuperAdmin()
                              || (isMyCompany(companyId) && companyJobWriteIsAllowed(companyId));

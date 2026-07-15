@@ -1,6 +1,8 @@
 import {useEffect, useState} from "react";
 import {CheckCircle2, Save} from "lucide-react";
+import {httpsCallable} from "firebase/functions";
 import {updateWorkerProfile, updateWorkerRut} from "../services/workerAuth";
+import {functions} from "../firebase";
 import {formatRut, isValidRut} from "../utils/rut";
 import type {EmploymentSector} from "../sectorExperience";
 
@@ -39,6 +41,7 @@ export default function WorkerProfileEditor({uid, email, profile}: Props) {
   const [os10Status, setOs10Status] = useState<Os10Status>("none");
   const [preferredShift, setPreferredShift] = useState<PreferredShift>("any");
   const [saving, setSaving] = useState(false);
+  const [requestingDeletion, setRequestingDeletion] = useState(false);
   const [notice, setNotice] = useState<{type: "success" | "error"; text: string} | null>(null);
 
   useEffect(() => {
@@ -104,6 +107,22 @@ export default function WorkerProfileEditor({uid, email, profile}: Props) {
   };
 
   const inputClass = "min-h-12 w-full rounded-xl border border-gray-300 bg-white px-4 text-base outline-none focus:ring-2 focus:ring-emerald-300";
+
+  const requestDeletion = async () => {
+    if (!window.confirm("Ocultaremos tu perfil y enviaremos una solicitud de eliminación. ¿Deseas continuar?")) return;
+    setRequestingDeletion(true);
+    setNotice(null);
+    try {
+      const requestWorkerDataDeletion = httpsCallable(functions, "requestWorkerDataDeletion");
+      await requestWorkerDataDeletion({});
+      setAvailable(false);
+      setNotice({type: "success", text: "Tu perfil quedó oculto y la solicitud de eliminación fue registrada."});
+    } catch (error: any) {
+      setNotice({type: "error", text: error?.message || "No se pudo registrar la solicitud de eliminación."});
+    } finally {
+      setRequestingDeletion(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -203,6 +222,13 @@ export default function WorkerProfileEditor({uid, email, profile}: Props) {
       <button onClick={save} disabled={saving} className="flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl bg-emerald-700 text-base font-black text-white shadow-lg disabled:opacity-60">
         <Save size={20} /> {saving ? "Guardando..." : "Guardar mi perfil"}
       </button>
+      <section className="rounded-3xl border border-red-200 bg-white p-5 sm:p-7">
+        <h3 className="text-lg font-black text-slate-900">Privacidad y eliminación</h3>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">Puedes ocultar inmediatamente tu perfil y solicitar la eliminación de tus datos. El equipo revisará los registros que deban conservarse por obligación legal o seguridad.</p>
+        <button onClick={requestDeletion} disabled={requestingDeletion} className="mt-4 min-h-12 w-full rounded-2xl border-2 border-red-300 px-4 font-black text-red-800 disabled:opacity-60">
+          {requestingDeletion ? "Registrando solicitud..." : "Solicitar eliminación de mis datos"}
+        </button>
+      </section>
     </div>
   );
 }

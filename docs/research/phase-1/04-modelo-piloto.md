@@ -29,7 +29,9 @@ trabajadores disponibles produce decepcion. La solucion es crear una celula loca
 
 ### Alcance propuesto
 
-- Hipotesis territorial: San Fernando y radio aproximado de 30 km.
+- Hipotesis territorial vigente: San Clemente, con radio definido por cada oferta y
+  transporte informado por la empresa. San Javier queda como segunda celula candidata
+  si no se consiguen tres empresas ancla con necesidades proximas.
 - Ocupaciones iniciales: cosecha, seleccion y packing.
 - Duracion: suficiente para incluir al menos dos ciclos reales de contratacion de las
   empresas; no se fija solo por calendario.

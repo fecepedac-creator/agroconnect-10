@@ -7,6 +7,7 @@ import {
   signInWorkerWithGoogle,
 } from "../services/workerAuth";
 import {SECTOR_EXPERIENCES, type EmploymentSector} from "../sectorExperience";
+import {LEGAL_VERSION} from "../legalContent";
 
 type Props = {
   onSuccess: () => void;
@@ -44,6 +45,9 @@ export default function WorkerAuthScreen({
   const [phone, setPhone] = useState("");
   const [mobility, setMobility] = useState<Mobility>(isAgriculture ? "needs_transport" : "public_transport");
   const [terms, setTerms] = useState(false);
+  const [matchingConsent, setMatchingConsent] = useState(false);
+  const [operationalMessages, setOperationalMessages] = useState(false);
+  const [marketing, setMarketing] = useState(false);
 
   React.useEffect(() => {
     setMode(initialMode);
@@ -155,8 +159,8 @@ export default function WorkerAuthScreen({
         setError("El teléfono debe tener 8 dígitos.");
         return false;
       }
-      if (!terms) {
-        setError("Debes aceptar los términos para crear tu cuenta.");
+      if (!terms || !matchingConsent) {
+        setError("Debes aceptar los términos y autorizar el uso del perfil para buscar oportunidades.");
         return false;
       }
     }
@@ -184,6 +188,12 @@ export default function WorkerAuthScreen({
         primaryTrade,
         sectors,
         mobility,
+        consent: {
+          version: LEGAL_VERSION,
+          matching: true,
+          operationalMessages,
+          marketing,
+        },
       });
       onSuccess();
     } catch (registerError: any) {
@@ -336,9 +346,21 @@ export default function WorkerAuthScreen({
                   <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-relaxed text-gray-700">
                     MundoConnect no es tu empleador. La empresa que contrata es responsable del trabajo y del pago. Tus datos solo se comparten para oportunidades laborales.
                   </div>
-                  <label className="flex min-h-12 items-center gap-3 text-base font-bold text-gray-800">
-                    <input type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} className="h-5 w-5 accent-emerald-600" />
-                    Acepto los términos y la política de privacidad
+                  <label className="flex min-h-12 items-start gap-3 text-base font-bold text-gray-800">
+                    <input aria-label="Acepto términos y privacidad" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} className="mt-1 h-5 w-5 accent-emerald-600" />
+                    <span>Acepto los <a className="text-emerald-800 underline" href="/legal/terminos" target="_blank" rel="noreferrer">términos</a> y la <a className="text-emerald-800 underline" href="/legal/privacidad" target="_blank" rel="noreferrer">política de privacidad</a>.</span>
+                  </label>
+                  <label className="flex min-h-12 items-start gap-3 text-base font-bold text-gray-800">
+                    <input aria-label="Autorizo matching laboral" type="checkbox" checked={matchingConsent} onChange={(event) => setMatchingConsent(event.target.checked)} className="mt-1 h-5 w-5 accent-emerald-600" />
+                    <span>Autorizo que mi perfil laboral limitado sea considerado para oportunidades. Mi contacto seguirá oculto hasta el flujo autorizado.</span>
+                  </label>
+                  <label className="flex min-h-12 items-start gap-3 text-sm font-semibold text-gray-700">
+                    <input aria-label="Acepto mensajes operativos" type="checkbox" checked={operationalMessages} onChange={(event) => setOperationalMessages(event.target.checked)} className="mt-1 h-5 w-5 accent-emerald-600" />
+                    <span>Quiero recibir avisos operativos sobre postulaciones y matches por los canales informados.</span>
+                  </label>
+                  <label className="flex min-h-12 items-start gap-3 text-sm font-semibold text-gray-700">
+                    <input aria-label="Acepto marketing" type="checkbox" checked={marketing} onChange={(event) => setMarketing(event.target.checked)} className="mt-1 h-5 w-5 accent-emerald-600" />
+                    <span>Quiero recibir novedades y campañas de MundoConnect. Esto es opcional.</span>
                   </label>
                   <p className="text-sm text-gray-500">Podrás verificar tu RUT posteriormente desde tu perfil.</p>
                 </div>

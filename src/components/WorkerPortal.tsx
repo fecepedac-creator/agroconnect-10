@@ -1,11 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import {
   collection,
-  collectionGroup,
   doc,
-  getDoc,
   onSnapshot,
   orderBy,
   query,
@@ -20,6 +18,7 @@ import {
   FileText,
   LogOut,
   MapPin,
+  AlertTriangle,
   ShieldCheck,
 } from "lucide-react";
 import { auth, db, functions } from "../firebase";
@@ -111,38 +110,20 @@ const useAuthUser = () => {
   return { authUser, loading };
 };
 
-const useJobs = (mode: "public" | "private") => {
+const useJobs = () => {
   const [jobs, setJobs] = useState<JobListing[]>([]);
-  const companyCache = useRef(new Map<string, string>());
 
   useEffect(() => {
-    const q =
-      mode === "public"
-        ? query(collection(db, "publicJobs"), orderBy("updatedAt", "desc"))
-        : query(collectionGroup(db, "jobs"), orderBy("createdAt", "desc"));
+    const q = query(collection(db, "publicJobs"), orderBy("updatedAt", "desc"));
     const unsub = onSnapshot(q, async (snap) => {
       const entries = await Promise.all(
         snap.docs.map(async (docSnap) => {
           const data = docSnap.data() as any;
-          const companyId =
-            mode === "public" ? data.companyId ?? "" : docSnap.ref.parent.parent?.id ?? data.companyId ?? "";
-          let companyName = data.companyName ?? "";
-
-          if (mode === "private" && !companyName && companyId) {
-            const cached = companyCache.current.get(companyId);
-            if (cached) {
-              companyName = cached;
-            } else {
-              const companySnap = await getDoc(doc(db, "companies", companyId));
-              if (companySnap.exists()) {
-                companyName = (companySnap.data() as any).name ?? "";
-                if (companyName) companyCache.current.set(companyId, companyName);
-              }
-            }
-          }
+          const companyId = data.companyId ?? "";
+          const companyName = data.companyName ?? "";
 
           return {
-            id: docSnap.id,
+            id: String(data.jobId || docSnap.id),
             title: data.title ?? "",
             description: data.description ?? "",
             workersNeeded: data.workersNeeded ?? 0,
@@ -151,6 +132,7 @@ const useJobs = (mode: "public" | "private") => {
             location: data.location ?? "",
             coordinates: data.coordinates ?? { lat: 0, lng: 0 },
             isActive: data.isActive ?? false,
+            publishPublic: data.publishPublic === true,
             jobStatus: data.jobStatus ?? (data.isActive ? "active" : "future"),
             sector: data.sector ?? "agriculture",
             category: data.category ?? "Otros",
@@ -181,7 +163,7 @@ const useJobs = (mode: "public" | "private") => {
     });
 
     return () => unsub();
-  }, [mode]);
+  }, []);
 
   return jobs;
 };
@@ -457,6 +439,52 @@ const JobDetailPublic = ({ job }: { job: JobListing }) => {
   </div>;
 };
 
+const SafetyReportButton = ({job}: {job: JobListing}) => {
+  const [open, setOpen] = useState(false);
+  const [category, setCategory] = useState("different_conditions");
+  const [details, setDetails] = useState("");
+  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+
+  const submit = async () => {
+    setStatus("sending");
+    try {
+      const submitSafetyReport = httpsCallable(functions, "submitSafetyReport");
+      await submitSafetyReport({category, details, companyId: job.companyId, jobId: job.id});
+      setStatus("sent");
+    } catch {
+      setStatus("error");
+    }
+  };
+
+  if (!open) {
+    return <button onClick={() => setOpen(true)} className="min-h-12 w-full rounded-2xl border border-red-200 bg-white px-4 text-sm font-black text-red-800"><AlertTriangle className="mr-2 inline" size={18} /> Reportar esta oferta</button>;
+  }
+
+  if (status === "sent") {
+    return <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 font-bold text-emerald-900">Denuncia recibida. El equipo revisará la oferta.</div>;
+  }
+
+  return (
+    <section className="rounded-2xl border border-red-200 bg-red-50 p-4">
+      <h3 className="font-black text-red-950">Reportar un problema</h3>
+      <select aria-label="Categoría de denuncia" value={category} onChange={(event) => setCategory(event.target.value)} className="mt-3 min-h-12 w-full rounded-xl border border-red-200 bg-white px-3">
+        <option value="different_conditions">Condiciones diferentes</option>
+        <option value="false_offer">Oferta o empresa falsa</option>
+        <option value="worker_fee">Cobro al trabajador</option>
+        <option value="discrimination">Discriminación o maltrato</option>
+        <option value="privacy">Uso indebido de datos</option>
+        <option value="other">Otro problema</option>
+      </select>
+      <textarea aria-label="Detalle de denuncia" value={details} onChange={(event) => setDetails(event.target.value)} maxLength={1000} className="mt-3 min-h-28 w-full rounded-xl border border-red-200 bg-white p-3" placeholder="Describe lo ocurrido sin incluir información sensible innecesaria." />
+      {status === "error" && <p role="alert" className="mt-2 text-sm font-bold text-red-800">No pudimos registrar la denuncia. Intenta nuevamente.</p>}
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <button onClick={() => setOpen(false)} className="min-h-12 rounded-xl border border-red-200 bg-white font-black text-red-900">Cancelar</button>
+        <button onClick={submit} disabled={status === "sending" || details.trim().length < 10} className="min-h-12 rounded-xl bg-red-800 font-black text-white disabled:opacity-50">{status === "sending" ? "Enviando..." : "Enviar denuncia"}</button>
+      </div>
+    </section>
+  );
+};
+
 const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied: boolean; onApply: () => void }) => (
   <div className="space-y-6">
     <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
@@ -535,6 +563,7 @@ const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied:
         Tu postulación quedará registrada en tu perfil.
       </div>
     </div>
+    <SafetyReportButton job={job} />
   </div>
 );
 
@@ -543,7 +572,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
   const experience = SECTOR_EXPERIENCES[sector];
   const go = useCallback((to: string) => navigate(`${to}${sectorQuery(sector)}`), [navigate, sector]);
   const { authUser, loading } = useAuthUser();
-  const jobs = useJobs(authUser ? "private" : "public");
+  const jobs = useJobs();
   const applications = useWorkerApplications(authUser?.uid);
   const matches = useWorkerMatches(authUser?.uid);
   const [workerProfile, setWorkerProfile] = useState<WorkerProfile | null>(null);
@@ -622,20 +651,17 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
   }, [authUser, matches]);
 
   useEffect(() => {
-    if (!authUser && path.startsWith("/worker")) {
+    if (!loading && !authUser && path.startsWith("/worker")) {
       go("/trabajos");
     }
-  }, [authUser, go, path]);
-
-  useEffect(() => {
-    if (authUser && path.startsWith("/auth")) {
-      go("/worker");
-    }
-  }, [authUser, go, path]);
+  }, [authUser, go, loading, path]);
 
   const visibleJobs = useMemo(
     () => jobs.filter((job) => (
-      (job.jobStatus ?? "active") !== "closed" && (job.sector ?? "agriculture") === sector
+      job.publishPublic === true &&
+      job.isActive === true &&
+      (job.jobStatus ?? "active") !== "closed" &&
+      (job.sector ?? "agriculture") === sector
     )),
     [jobs, sector]
   );

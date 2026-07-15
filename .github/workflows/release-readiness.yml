@@ -32,6 +32,12 @@ jobs:
           npm test
           Pop-Location
 
+      - name: Run isolated E2E
+        shell: pwsh
+        run: |
+          npx playwright install chromium
+          npm run test:e2e:emulated
+
       - name: Run strict security scan
         shell: pwsh
         run: .\ops\security-scan.ps1 -RequireEnvMapping

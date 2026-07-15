@@ -20,6 +20,12 @@ export type WorkerRegisterInput = {
   primaryTrade: string;
   sectors: Array<"agriculture" | "security">;
   mobility: "needs_transport" | "public_transport" | "own_transport";
+  consent: {
+    version: string;
+    matching: true;
+    operationalMessages: boolean;
+    marketing: boolean;
+  };
 };
 
 type WorkerProfile = {
@@ -38,6 +44,8 @@ type WorkerProfile = {
   preferredShift?: "day" | "night" | "rotating" | "any";
   role: "worker";
   authProviders: string[];
+  consent?: WorkerRegisterInput["consent"] & {acceptedAt: any};
+  discoverable?: boolean;
   createdAt?: any;
   updatedAt?: any;
   lastSeen?: any;
@@ -58,6 +66,7 @@ const buildWorkerProfile = (payload: {
   primaryTrade?: string;
   sectors?: Array<"agriculture" | "security">;
   mobility?: "needs_transport" | "public_transport" | "own_transport";
+  consent: WorkerRegisterInput["consent"];
 }): WorkerProfile => ({
   uid: payload.uid,
   displayName: payload.fullName,
@@ -69,6 +78,8 @@ const buildWorkerProfile = (payload: {
   primaryTrade: payload.primaryTrade,
   sectors: payload.sectors,
   mobility: payload.mobility,
+  consent: {...payload.consent, acceptedAt: serverTimestamp()},
+  discoverable: payload.consent.matching === true,
   role: "worker",
   authProviders: payload.providers,
   createdAt: serverTimestamp(),
@@ -77,8 +88,11 @@ const buildWorkerProfile = (payload: {
 });
 
 const upsertWorkerDocs = async (uid: string, data: Partial<WorkerProfile>) => {
-  await setDoc(doc(db, USERS_COLLECTION, uid), data, { merge: true });
-  await setDoc(doc(db, WORKERS_COLLECTION, uid), data, { merge: true });
+  const safeData = Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined)
+  ) as Partial<WorkerProfile>;
+  await setDoc(doc(db, USERS_COLLECTION, uid), safeData, { merge: true });
+  await setDoc(doc(db, WORKERS_COLLECTION, uid), safeData, { merge: true });
 };
 
 const upsertWorkerUsername = async (rut: string, payload: { uid: string; email: string }) => {
@@ -108,6 +122,7 @@ export async function registerWorker(input: WorkerRegisterInput) {
     primaryTrade: input.primaryTrade.trim(),
     sectors: input.sectors,
     mobility: input.mobility,
+    consent: input.consent,
   });
 
   await upsertWorkerDocs(uid, profile);

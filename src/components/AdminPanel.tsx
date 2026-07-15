@@ -18,6 +18,7 @@ import { httpsCallable } from "firebase/functions";
 import { auth, db, debugAuthClaims, functions, setSuperadminByEmail } from "../firebase";
 import type { CompanyStatus } from "../types";
 import { normalizeCompanyStatus } from "../utils/companyStatus";
+import TrustOperationsPanel from "./TrustOperationsPanel";
 import {
   AlertTriangle,
   Briefcase,
@@ -110,9 +111,9 @@ type AdminPanelProps = {
   setCompanies: React.Dispatch<React.SetStateAction<any[]>>;
   adminConfig: AdminConfig;
   setAdminConfig: React.Dispatch<React.SetStateAction<AdminConfig>>;
-  activeTab: "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
+  activeTab: "OVERVIEW" | "COMPANIES" | "REQUESTS" | "TRUST" | "SETTINGS";
   setActiveTab: React.Dispatch<
-    React.SetStateAction<"OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS">
+    React.SetStateAction<"OVERVIEW" | "COMPANIES" | "REQUESTS" | "TRUST" | "SETTINGS">
   >;
   isDemoMode: boolean;
   onToggleDemo: (v: boolean) => void;
@@ -129,6 +130,8 @@ type GlobalStatsDoc = {
   jobsFuture?: number;
   jobsClosed?: number;
   applicationsTotal?: number;
+  matchesTotal?: number;
+  matchesConfirmed?: number;
   hiresTotal?: number;
   workersTotal?: number; // si existe en el futuro
   updatedAt?: any;
@@ -138,6 +141,8 @@ type MonthlyStatsDoc = {
   ym: string; // YYYY-MM
   jobsCreated?: number;
   applicationsCreated?: number;
+  matchesCreated?: number;
+  matchesConfirmed?: number;
   hiresCreated?: number;
   updatedAt?: any;
 };
@@ -781,6 +786,8 @@ export default function AdminPanel(props: AdminPanelProps) {
       jobsFuture: clampInt(globalStats?.jobsFuture, 0),
       jobsClosed: clampInt(globalStats?.jobsClosed, 0),
       applicationsTotal: clampInt(globalStats?.applicationsTotal, 0),
+      matchesTotal: clampInt(globalStats?.matchesTotal, 0),
+      matchesConfirmed: clampInt(globalStats?.matchesConfirmed, 0),
       hiresTotal: clampInt(globalStats?.hiresTotal, 0),
       workersTotal: clampInt(globalStats?.workersTotal, 0),
     };
@@ -1307,6 +1314,7 @@ export default function AdminPanel(props: AdminPanelProps) {
               <span className="flex gap-2 flex-wrap">
                 <span>Postulaciones: <b>{clampInt(monthDoc?.applicationsCreated, 0)}</b></span>
                 <span>Contrataciones: <b>{clampInt(monthDoc?.hiresCreated, 0)}</b></span>
+                <span>Matches: <b>{clampInt(monthDoc?.matchesConfirmed, 0)}</b></span>
               </span>
             }
           />
@@ -1317,6 +1325,7 @@ export default function AdminPanel(props: AdminPanelProps) {
               <span className="flex gap-2 flex-wrap">
                 <span>Hires: <b>{effectiveGlobal.hiresTotal}</b></span>
                 <span>Apps: <b>{effectiveGlobal.applicationsTotal}</b></span>
+                <span>Matches: <b>{effectiveGlobal.matchesConfirmed}</b></span>
               </span>
             }
           />
@@ -2404,6 +2413,15 @@ export default function AdminPanel(props: AdminPanelProps) {
             Solicitudes
           </button>
           <button
+            onClick={() => setActiveTab("TRUST")}
+            className={
+              "px-4 py-2 rounded-xl text-sm font-semibold transition " +
+              (activeTab === "TRUST" ? "bg-emerald-600 text-white shadow" : "text-gray-700 hover:bg-emerald-50")
+            }
+          >
+            Confianza
+          </button>
+          <button
             onClick={() => setActiveTab("SETTINGS")}
             className={
               "px-4 py-2 rounded-xl text-sm font-semibold transition " +
@@ -2418,6 +2436,7 @@ export default function AdminPanel(props: AdminPanelProps) {
           {activeTab === "OVERVIEW" && renderExecutiveAndActivity()}
           {activeTab === "COMPANIES" && renderCompanies()}
           {activeTab === "REQUESTS" && renderRequests()}
+          {activeTab === "TRUST" && <TrustOperationsPanel />}
           {activeTab === "SETTINGS" && renderSettings()}
         </div>
       </div>

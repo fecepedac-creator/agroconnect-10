@@ -55,7 +55,11 @@ jobs:
             '${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}' \
             '${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}' \
             '${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}' \
-            '${{ secrets.VITE_FIREBASE_APP_ID }}'; do
+            '${{ secrets.VITE_FIREBASE_APP_ID }}' \
+            '${{ secrets.VITE_LEGAL_OPERATOR_NAME }}' \
+            '${{ secrets.VITE_LEGAL_OPERATOR_RUT }}' \
+            '${{ secrets.VITE_LEGAL_OPERATOR_ADDRESS }}' \
+            '${{ secrets.VITE_LEGAL_CONTACT_EMAIL }}'; do
             if [[ -z "$value" ]]; then
               echo "Missing Firebase web configuration for this environment." >&2
               exit 1
@@ -71,6 +75,10 @@ jobs:
           VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_LEGAL_OPERATOR_NAME: ${{ secrets.VITE_LEGAL_OPERATOR_NAME }}
+          VITE_LEGAL_OPERATOR_RUT: ${{ secrets.VITE_LEGAL_OPERATOR_RUT }}
+          VITE_LEGAL_OPERATOR_ADDRESS: ${{ secrets.VITE_LEGAL_OPERATOR_ADDRESS }}
+          VITE_LEGAL_CONTACT_EMAIL: ${{ secrets.VITE_LEGAL_CONTACT_EMAIL }}
 
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
