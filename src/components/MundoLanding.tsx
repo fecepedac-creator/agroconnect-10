@@ -4,16 +4,16 @@ import {
   BriefcaseBusiness,
   Building2,
   CheckCircle2,
-  Construction,
   Handshake,
   HeartHandshake,
   MapPin,
   ShieldCheck,
   Sprout,
-  Truck,
   UserRoundCheck,
   UsersRound,
 } from "lucide-react";
+import {EXPANSION_SECTORS} from "../expansionSectors";
+import ExpansionSectorIcon from "./ExpansionSectorIcon";
 
 const sectors = [
   {
@@ -138,15 +138,16 @@ export default function MundoLanding() {
               </article>
             ))}
           </div>
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            {[
-              {name: "ConstrucciónConnect", icon: Construction},
-              {name: "TransporteConnect", icon: Truck},
-            ].map(({name, icon: Icon}) => (
-              <div key={name} className="flex items-center gap-4 rounded-3xl border border-slate-900/8 bg-white/65 p-6">
-                <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-200 text-slate-700"><Icon size={23} /></span>
-                <div><p className="font-black text-slate-800">{name}</p><p className="mt-1 text-sm font-bold text-slate-500">Proximamente</p></div>
-              </div>
+          <div className="mt-14 flex items-end justify-between gap-5">
+            <div><p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-700">Próximas áreas</p><h3 className="mt-2 text-2xl font-black sm:text-3xl">La red que puede mover más trabajo en Chile.</h3></div>
+            <span className="hidden rounded-full bg-slate-950 px-4 py-2 text-xs font-black uppercase tracking-[0.14em] text-white sm:block">En preparación</span>
+          </div>
+          <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {EXPANSION_SECTORS.map((sector) => (
+              <button key={sector.slug} onClick={() => go(`/${sector.slug}`)} className="group flex min-h-36 items-start gap-4 rounded-3xl border border-slate-900/8 bg-white/70 p-6 text-left shadow-[0_14px_40px_rgba(15,23,42,0.06)] transition hover:-translate-y-1 hover:bg-white hover:shadow-[0_20px_55px_rgba(15,23,42,0.12)]">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl" style={{background: sector.accent, color: sector.accentText}}><ExpansionSectorIcon name={sector.icon} size={23} /></span>
+                <span className="min-w-0"><span className="block font-black text-slate-900">{sector.brand}</span><span className="mt-2 block text-sm font-semibold leading-relaxed text-slate-500">{sector.eyebrow}</span><span className="mt-3 inline-flex items-center gap-1 text-xs font-black uppercase tracking-[0.12em] text-emerald-800">Conocer propuesta <ArrowRight className="transition group-hover:translate-x-1" size={14} /></span></span>
+              </button>
             ))}
           </div>
         </section>

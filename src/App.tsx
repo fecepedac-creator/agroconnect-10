@@ -42,6 +42,7 @@ import {
   DEMO_COMPANIES,
 } from "./constants";
 import { getCompanies } from "./services/companies";
+import {getExpansionSector} from "./expansionSectors";
 type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
 
 const Dashboard = lazy(() => import("./components/Dashboard"));
@@ -56,6 +57,7 @@ const SectorLanding = lazy(() => import("./components/SectorLanding"));
 const MundoLanding = lazy(() => import("./components/MundoLanding"));
 const CompanyAccessScreen = lazy(() => import("./components/CompanyAccessScreen"));
 const AdminAccessScreen = lazy(() => import("./components/AdminAccessScreen"));
+const ExpansionSectorLanding = lazy(() => import("./components/ExpansionSectorLanding"));
 const GlobalSearch = lazy(() => import("./components/GlobalSearch"));
 const CompanySettings = lazy(() => import("./components/CompanySettings"));
 const Broadcasts = lazy(() => import("./components/Broadcasts"));
@@ -449,6 +451,15 @@ const App: React.FC = () => {
     return (
       <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
         <SectorLanding sector={path === "/seguridad" ? "security" : "agriculture"} />
+      </Suspense>
+    );
+  }
+
+  const expansionSector = getExpansionSector(path);
+  if (expansionSector) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <ExpansionSectorLanding sector={expansionSector} />
       </Suspense>
     );
   }
