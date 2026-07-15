@@ -370,7 +370,7 @@ export default function LoginScreen({
               </div>
               <div>
                 <div className="text-xl font-extrabold">Soy Trabajador</div>
-                <div className="text-xs opacity-80">Ingreso con RUT + contraseña</div>
+                <div className="text-xs opacity-80">Ingreso simple con Google o correo</div>
               </div>
             </div>
 
@@ -386,7 +386,7 @@ export default function LoginScreen({
               {loading === "worker" ? "Ingresando..." : "Ingresar al Portal →"}
             </button>
 
-            <div className="mt-4 text-xs opacity-80">No pedimos correo. Tu RUT funciona como usuario.</div>
+            <div className="mt-4 text-xs opacity-80">Tu RUT se usa solo para verificar tu perfil, no como clave pública.</div>
           </div>
 
           {/* Centro (logo) */}

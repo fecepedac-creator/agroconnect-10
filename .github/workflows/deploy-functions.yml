@@ -20,6 +20,10 @@ on:
 jobs:
   deploy-functions:
     runs-on: ubuntu-latest
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod') && 'production' || (github.event_name == 'workflow_dispatch' && inputs.environment) || (github.ref_name == 'main' && 'production') || 'staging' }}
+    concurrency:
+      group: functions-${{ github.ref_name }}-${{ inputs.environment || 'automatic' }}
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -95,6 +99,12 @@ jobs:
           npm ci
           npm --prefix functions ci
 
+      - name: Validate source
+        run: |
+          npm run test:rules
+          ESLINT_USE_FLAT_CONFIG=false npm --prefix functions run lint
+          npm --prefix functions test
+
       - name: Install Firebase CLI
         run: npm i -g firebase-tools
 
@@ -103,6 +113,11 @@ jobs:
         run: |
           ENV_FILE="functions/.env.${{ steps.target.outputs.project_id }}"
           printf 'SUPERADMIN_EMAILS=%s\n' '${{ steps.target.outputs.superadmin_emails }}' > "$ENV_FILE"
+
+      - name: Deploy Firestore configuration
+        shell: bash
+        run: |
+          firebase deploy --only "firestore:rules,firestore:indexes" --project "${{ steps.target.outputs.project_id }}" --non-interactive
 
       - name: Deploy Functions
         shell: bash

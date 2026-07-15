@@ -13,7 +13,8 @@ import {
   limit,
 } from "firebase/firestore";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { auth, db, syncSuperadminClaims } from "./firebase";
+import { httpsCallable } from "firebase/functions";
+import { auth, db, functions, syncSuperadminClaims } from "./firebase";
 
 import {
   LayoutDashboard,
@@ -53,10 +54,12 @@ const Jobs = lazy(() => import("./components/Jobs"));
 const AdminPanel = lazy(() => import("./components/AdminPanel"));
 const AIReview = lazy(() => import("./components/AIReview"));
 const WorkerPortal = lazy(() => import("./components/WorkerPortal"));
+const SectorLanding = lazy(() => import("./components/SectorLanding"));
 const GlobalSearch = lazy(() => import("./components/GlobalSearch"));
 const CompanySettings = lazy(() => import("./components/CompanySettings"));
 const Broadcasts = lazy(() => import("./components/Broadcasts"));
 const WorkerAuthScreen = lazy(() => import("./components/WorkerAuthScreen"));
+const CompanyMatches = lazy(() => import("./components/CompanyMatches"));
 
 const App: React.FC = () => {
   const [userRole, setUserRole] = useState<UserRole | null>(null);
@@ -140,39 +143,21 @@ const App: React.FC = () => {
   };
 
   const handleInviteWorker = async (worker: Worker) => {
-    // Add to local state (existing behavior)
-    setWorkers((prev) => {
-      if (prev.some((item) => item.id === worker.id)) return prev;
-      return [
-        ...prev,
-        {
-          ...worker,
-          status: worker.status ?? WorkerStatus.PENDING,
-        },
-      ];
-    });
-    
-    // Create invitation record in Firestore
-    if (currentCompany?.id) {
-      try {
-        await addDoc(collection(db, "companies", currentCompany.id, "worker_invitations"), {
-          workerId: worker.id,
-          workerName: worker.name,
-          workerPhone: worker.phone,
-          workerRegion: worker.region,
-          workerSkills: worker.skills,
-          status: "pending",
-          createdAt: serverTimestamp(),
-          createdBy: {
-            uid: auth.currentUser?.uid || null,
-            email: auth.currentUser?.email || null,
-          },
-        });
-        console.log(`[AgroConnect] Invitación creada para ${worker.name}`);
-      } catch (e) {
-        console.error("Error creating invitation:", e);
-      }
+    if (!currentCompany?.id) {
+      throw new Error("Selecciona una empresa antes de invitar.");
     }
+    const activeJob = jobs.find(
+      (job) => job.isActive === true || job.jobStatus === "active"
+    );
+    if (!activeJob) {
+      throw new Error("Primero crea o activa una oferta de trabajo.");
+    }
+    const inviteWorkerToJob = httpsCallable(functions, "inviteWorkerToJob");
+    await inviteWorkerToJob({
+      companyId: currentCompany.id,
+      jobId: activeJob.id,
+      workerId: worker.id,
+    });
   };
 
   const handleRegisterLead = async (leadData: Omit<Lead, "id" | "status" | "createdAt" | "updatedAt">) => {
@@ -185,7 +170,7 @@ const App: React.FC = () => {
       };
       const ref = await addDoc(collection(db, "company_leads"), payload);
       // eslint-disable-next-line no-console
-      console.log(`🚨 [SISTEMA] Nuevo Lead: ${leadData.companyName} (${ref.id})`);
+      console.log(`ðŸš¨ [SISTEMA] Nuevo Lead: ${leadData.companyName} (${ref.id})`);
       return { ok: true };
     } catch (e: any) {
       // eslint-disable-next-line no-console
@@ -312,15 +297,20 @@ const App: React.FC = () => {
     return () => unsub();
   }, [userRole]);
 
-  // Subscribe to public workers pool (for Global Search)
+  // Subscribe to the privacy-safe worker discovery projection.
   useEffect(() => {
+    if (userRole !== UserRole.COMPANY && userRole !== UserRole.ADMIN) {
+      setPublicWorkers([]);
+      setPublicWorkersLoading(false);
+      return;
+    }
     setPublicWorkersLoading(true);
     
     // Query workers that are available (consented) and public
     const q = query(
-      collection(db, "publicWorkers"),
+      collection(db, "discoverableWorkers"),
       where("isAvailable", "==", true),
-      orderBy("createdAt", "desc"),
+      orderBy("updatedAt", "desc"),
       limit(100)
     );
     
@@ -331,13 +321,12 @@ const App: React.FC = () => {
           const data = d.data();
           return {
             id: d.id,
-            name: data.name || "",
-            rut: data.rut || "",
-            phone: data.phone || "",
-            region: data.region || "",
+            name: data.displayName || "Trabajador",
+            rut: "",
+            phone: "",
+            region: data.commune || data.region || "",
             status: data.status || WorkerStatus.CONSENTED,
             skills: data.skills || [],
-            coordinates: data.coordinates || null,
           } as Worker;
         });
         setPublicWorkers(list);
@@ -351,7 +340,7 @@ const App: React.FC = () => {
       }
     );
     return () => unsub();
-  }, []);
+  }, [userRole]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -461,10 +450,18 @@ const App: React.FC = () => {
     );
   }
 
+  if (path === "/agro" || path === "/seguridad") {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <SectorLanding sector={path === "/seguridad" ? "security" : "agriculture"} />
+      </Suspense>
+    );
+  }
+
   if (path.startsWith("/trabajos") || path.startsWith("/worker") || path.startsWith("/auth")) {
     return (
       <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center p-6"><div className="text-sm text-gray-500">Cargando portal...</div></div>}>
-        <WorkerPortal />
+        <WorkerPortal sector={new URLSearchParams(window.location.search).get("sector") === "security" ? "security" : "agriculture"} />
       </Suspense>
     );
   }
@@ -557,6 +554,7 @@ const App: React.FC = () => {
 
               <div className="pt-4 pb-1 px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Reclutamiento</div>
               <NavItem view={AppView.GLOBAL_SEARCH} icon={Globe} label="Buscar Talento" />
+              <NavItem view={AppView.MATCHES} icon={Briefcase} label="Matches" />
 
               <div className="pt-4 pb-1 px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">
                 Configuración
@@ -570,6 +568,7 @@ const App: React.FC = () => {
               <NavItem view={AppView.ADMIN} icon={LayoutDashboard} label="Panel SuperAdmin" />
               <NavItem view={AppView.DASHBOARD} icon={LayoutDashboard} label="Dashboard" />
               <NavItem view={AppView.GLOBAL_SEARCH} icon={Globe} label="Global Search" />
+              <NavItem view={AppView.MATCHES} icon={Briefcase} label="Matches" />
               <NavItem view={AppView.WORKERS} icon={Users} label="Trabajadores" />
               <NavItem view={AppView.JOBS} icon={Briefcase} label="Ofertas" />
               <NavItem view={AppView.PUBLISH_OFFER} icon={PlusCircle} label="Publicar oferta" />
@@ -685,6 +684,13 @@ const App: React.FC = () => {
               isDemo={publicWorkers.length === 0}
               currentCompany={currentCompany}
             />
+          )}
+          {currentView === AppView.MATCHES && (
+            currentCompany ? (
+              <CompanyMatches company={currentCompany} />
+            ) : (
+              <div className="text-sm text-gray-500">Selecciona una empresa para ver sus matches.</div>
+            )
           )}
           {currentView === AppView.SETTINGS_COMPANY &&
             (userRole === UserRole.ADMIN ? (

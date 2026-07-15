@@ -21,6 +21,9 @@ function Run-Step {
   try {
     Push-Location $Workdir
     Invoke-Expression $Command
+    if ($LASTEXITCODE -ne 0) {
+      throw "Command failed with exit code $LASTEXITCODE"
+    }
     $status = 'PASS'
     $notes = ''
   }
@@ -41,11 +44,12 @@ function Run-Step {
   }
 }
 
-Run-Step -Name 'Frontend install' -Command 'npm install' -Workdir $repoRoot
+Run-Step -Name 'Frontend install' -Command 'npm ci' -Workdir $repoRoot
+Run-Step -Name 'Firestore rules' -Command 'npm run test:rules' -Workdir $repoRoot
 Run-Step -Name 'Frontend lint' -Command 'npm run lint' -Workdir $repoRoot
 Run-Step -Name 'Frontend build' -Command 'npm run build' -Workdir $repoRoot
-Run-Step -Name 'Functions install' -Command 'npm install' -Workdir (Join-Path $repoRoot 'functions')
-Run-Step -Name 'Functions lint' -Command 'npm run lint' -Workdir (Join-Path $repoRoot 'functions')
+Run-Step -Name 'Functions install' -Command 'npm ci' -Workdir (Join-Path $repoRoot 'functions')
+Run-Step -Name 'Functions lint' -Command '$env:ESLINT_USE_FLAT_CONFIG="false"; npm run lint' -Workdir (Join-Path $repoRoot 'functions')
 Run-Step -Name 'Functions build' -Command 'npm run build' -Workdir (Join-Path $repoRoot 'functions')
 Run-Step -Name 'Security scan' -Command 'powershell -ExecutionPolicy Bypass -File ops\security-scan.ps1' -Workdir $repoRoot
 

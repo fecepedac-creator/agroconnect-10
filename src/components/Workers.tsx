@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Worker, WorkerStatus } from '../types';
 import { generateBroadcastMessage } from '../services/geminiService';
-import { Upload, FileSpreadsheet, Send, Search, MessageCircle, X, Wand2, CheckSquare, Square } from 'lucide-react';
+import { Upload, FileSpreadsheet, Send, Search, MessageCircle, Lock, X, Wand2, CheckSquare, Square } from 'lucide-react';
 
 interface WorkersProps {
   workers: Worker[];
@@ -187,9 +187,11 @@ const Workers: React.FC<WorkersProps> = ({ workers, setWorkers }) => {
                   </td>
                   <td className="p-4">
                     <div className="font-medium text-gray-800">{worker.name}</div>
-                    <div className="text-xs text-gray-400">{worker.rut}</div>
+                    {worker.rut && <div className="text-xs text-gray-400">{worker.rut}</div>}
                   </td>
-                  <td className="p-4 text-gray-600 text-sm font-mono">{worker.phone}</td>
+                  <td className="p-4 text-gray-600 text-sm">
+                    {worker.phone || <span className="inline-flex items-center gap-1"><Lock size={13} /> Disponible después del match</span>}
+                  </td>
                   <td className="p-4">
                     <div className="flex flex-wrap gap-1">
                       {worker.skills.map(skill => (
@@ -199,14 +201,14 @@ const Workers: React.FC<WorkersProps> = ({ workers, setWorkers }) => {
                   </td>
                   <td className="p-4">{getStatusBadge(worker.status)}</td>
                   <td className="p-4 text-right">
-                    <a 
+                    {worker.phone ? <a
                       href={`https://wa.me/${worker.phone.replace('+','')}?text=Hola ${worker.name}, te escribo desde AgroConnect.`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 px-3 py-1.5 rounded-full transition-colors text-xs font-bold border border-emerald-200"
                     >
                       <MessageCircle size={14} /> WhatsApp
-                    </a>
+                    </a> : <span className="text-xs font-semibold text-gray-500">Contacto protegido</span>}
                   </td>
                 </tr>
               ))}

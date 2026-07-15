@@ -5,7 +5,7 @@ import { calculateDistance, getCurrentPosition } from '../services/geolocationSe
 import { Search, MapPin, UserPlus, Filter, Sliders, Map as MapIcon, CheckCircle2 } from 'lucide-react';
 
 interface GlobalSearchProps {
-  onInviteWorker: (worker: Worker) => void;
+  onInviteWorker: (worker: Worker) => Promise<void>;
   globalWorkers: Worker[];
   isLoading?: boolean;
   isDemo?: boolean;
@@ -78,14 +78,18 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({
 
   }, [searchTerm, radius, selectedSkill, userLocation, globalWorkers]);
 
-  const handleInvite = (worker: Worker) => {
+  const handleInvite = async (worker: Worker) => {
     if (!currentCompany) {
       setNotice("Selecciona una empresa primero para invitar trabajadores.");
       return;
     }
-    
-    setNotice(`Invitación enviada a ${worker.name}. Se creó un registro para seguimiento.`);
-    onInviteWorker(worker); 
+
+    try {
+      await onInviteWorker(worker);
+      setNotice(`Invitación enviada a ${worker.name} para una oferta activa.`);
+    } catch (error: any) {
+      setNotice(error?.message || "No fue posible enviar la invitación.");
+    }
   };
 
   return (

@@ -10,13 +10,25 @@ import { getFunctions, httpsCallable, type Functions } from "firebase/functions"
  *
  * Proyecto: agroconnect-10-14242150-423d4
  */
-const firebaseConfig = {
+const developmentDefaults = {
   apiKey: "AIzaSyApfbowH8aWZBjfyjAgggpUXLkDWjDYGmA",
   authDomain: "agroconnect-10-14242150-423d4.firebaseapp.com",
   projectId: "agroconnect-10-14242150-423d4",
   storageBucket: "agroconnect-10-14242150-423d4.firebasestorage.app",
   messagingSenderId: "517674718866",
   appId: "1:517674718866:web:b8d82bf49234458b28b84b",
+};
+
+// Deploy workflows provide these values per environment. Defaults keep local
+// development compatible with the existing Firebase project.
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || developmentDefaults.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || developmentDefaults.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || developmentDefaults.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || developmentDefaults.storageBucket,
+  messagingSenderId:
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || developmentDefaults.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || developmentDefaults.appId,
 };
 
 export const app: FirebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
@@ -77,7 +89,7 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
  */
 export async function syncUserAccess(): Promise<{
   ok: boolean;
-  role: "company_admin" | "worker" | "none";
+  role: "company_admin" | "company_hr" | "worker" | "none";
   companyId: string | null;
   claimsUpdated?: boolean;
 }> {
@@ -85,7 +97,7 @@ export async function syncUserAccess(): Promise<{
   const res = await fn({});
   const data = res.data as {
     ok: boolean;
-    role: "company_admin" | "worker" | "none";
+    role: "company_admin" | "company_hr" | "worker" | "none";
     companyId: string | null;
     claimsUpdated?: boolean;
   };

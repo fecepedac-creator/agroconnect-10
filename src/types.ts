@@ -81,13 +81,23 @@ export interface JobOffer {
   jobStatus?: 'future' | 'active' | 'closed';
   publishPublic?: boolean;
   // Enhanced Fields
-  category?: 'Cosecha' | 'Packing' | 'Poda' | 'Maquinaria' | 'Otros';
+  sector?: 'agriculture' | 'security';
+  category?: string;
   paymentType?: 'Al Día' | 'Semanal' | 'Quincenal' | 'Por Kilo';
   benefits?: {
     transport?: boolean;
     lunch?: boolean;
   };
   transportInfo?: string; // e.g., "Salida Plaza de Armas 06:00 AM"
+  transportMode?: 'employer_transport' | 'transport_allowance' | 'worker_own' | 'pending';
+  pickupPoints?: string;
+  departureTime?: string;
+  returnTime?: string;
+  transportCost?: number;
+  shiftType?: 'day' | 'night' | 'rotating';
+  shiftPattern?: string;
+  requiresOs10?: boolean;
+  facilityType?: string;
   otherBenefits?: string; // New: For sunscreen, gloves, etc.
 }
 
@@ -131,6 +141,7 @@ export enum AppView {
   GLOBAL_SEARCH = 'GLOBAL_SEARCH',
   BROADCASTS = 'BROADCASTS',
   PUBLISH_OFFER = 'PUBLISH_OFFER',
+  MATCHES = 'MATCHES',
   SETTINGS_COMPANY = 'SETTINGS_COMPANY',
 }
 

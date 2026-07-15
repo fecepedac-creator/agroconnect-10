@@ -2,6 +2,13 @@
 
 Plataforma digital de reclutamiento operativo para empleos de alta demanda (agro, construccion, seguridad y oficios similares), conectando oferta y demanda laboral en forma simple y mobile-first.
 
+## Estrategia de producto
+
+La investigacion empresarial, benchmark, marco legal, piloto e instrumentos de
+entrevista de la Fase 1 estan consolidados en:
+
+- [Fase 1 - Investigacion estrategica MundoConnect](docs/research/phase-1/README.md)
+
 ## Stack
 
 - Frontend: React + Vite + Firebase Web SDK

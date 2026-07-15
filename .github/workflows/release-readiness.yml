@@ -17,17 +17,19 @@ jobs:
       - name: Run frontend checks
         shell: pwsh
         run: |
-          npm install
+          npm ci
           npm run lint
           npm run build
+          npm run test:rules
 
       - name: Run functions checks
         shell: pwsh
         run: |
           Push-Location functions
-          npm install
+          npm ci
+          $env:ESLINT_USE_FLAT_CONFIG = "false"
           npm run lint
-          npm run build
+          npm test
           Pop-Location
 
       - name: Run strict security scan
