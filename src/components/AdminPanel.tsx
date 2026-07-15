@@ -918,40 +918,25 @@ export default function AdminPanel(props: AdminPanelProps) {
       return;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    const status: BillingRecordDoc["status"] =
-      billingType === "payment"
-        ? "paid"
-        : billingDueAt && billingDueAt < today
-          ? "overdue"
-          : "unpaid";
-
     setBillingSaving(true);
     try {
-      const targetCollection = billingType === "payment" ? "billing_payments" : "billing_invoices";
-      await addDoc(collection(db, "companies", selectedCompanyId, targetCollection),
-        stripUndefinedDeep({
-          type: billingType,
-          amount: amt,
-          currency: billingCurrency,
-          issuedAt: billingIssuedAt || undefined,
-          dueAt: billingDueAt || undefined,
-          paidAt: billingPaidAt || undefined,
-          status,
-          reference: billingReference.trim() || undefined,
-          note: billingNote.trim() || undefined,
-          createdAt: serverTimestamp(),
-          createdBy: { uid: me?.uid, email: me?.email || null },
-        } satisfies BillingRecordDoc)
-      );
-
-      // (Opcional/MVP) si registras una factura vencida, marcamos la empresa como morosa
-      if (billingType === "invoice" && status === "overdue") {
-        await updateDoc(doc(db, "companies", selectedCompanyId), {
-          status: "overdue",
-          updatedAt: serverTimestamp(),
-        } as any);
+      if (billingCurrency !== "CLP") {
+        throw new Error("Por ahora la facturación admite únicamente pesos chilenos.");
       }
+      const recordBillingEntry = httpsCallable(functions, "recordBillingEntry");
+      await recordBillingEntry({
+        companyId: selectedCompanyId,
+        type: billingType,
+        amount: Math.round(amt),
+        issuedAt: billingIssuedAt,
+        dueAt: billingDueAt || null,
+        paidAt: billingPaidAt || null,
+        reference: billingReference.trim() || null,
+        note: billingNote.trim() || null,
+        idempotencyKey:
+          globalThis.crypto?.randomUUID?.() ||
+          String(Date.now()) + "_" + Math.random().toString(36).slice(2),
+      });
 
       setBillingModalOpen(false);
       notify("success", `Registro de ${billingType === "payment" ? "pago" : "factura"} guardado.`);

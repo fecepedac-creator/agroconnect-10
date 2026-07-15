@@ -1,0 +1,3 @@
+﻿interface:
+  display_name: "CI/CD Guardrails"
+  short_description: "Configura gates para merge y release"

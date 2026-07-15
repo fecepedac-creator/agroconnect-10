@@ -1,444 +1,360 @@
-// src/components/WorkerAuthScreen.tsx
-import React, { useState } from "react";
+import React, {useState} from "react";
+import {FiEye, FiEyeOff} from "react-icons/fi";
 import {
   loginWorker,
   registerWorker,
   sendWorkerPasswordReset,
   signInWorkerWithGoogle,
-  updateWorkerRut,
 } from "../services/workerAuth";
-import { formatRut, isValidRut } from "../utils/rut";
-import { FiInfo, FiEye, FiEyeOff } from "react-icons/fi";
-import { auth } from "../firebase";
+import {SECTOR_EXPERIENCES, type EmploymentSector} from "../sectorExperience";
 
 type Props = {
   onSuccess: () => void;
   onBack?: () => void;
   initialMode?: "login" | "register";
+  sector?: EmploymentSector;
 };
 
-export default function WorkerAuthScreen({ onSuccess, onBack, initialMode = "login" }: Props) {
+type Mobility = "needs_transport" | "public_transport" | "own_transport";
+
+export default function WorkerAuthScreen({
+  onSuccess,
+  onBack,
+  initialMode = "login",
+  sector = "agriculture",
+}: Props) {
+  const experience = SECTOR_EXPERIENCES[sector];
+  const isAgriculture = sector === "agriculture";
   const [mode, setMode] = useState<"login" | "register">(initialMode);
+  const [registerStep, setRegisterStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [showResetCta, setShowResetCta] = useState(false);
-  const [needsRut, setNeedsRut] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [pass1, setPass1] = useState("");
+  const [pass2, setPass2] = useState("");
+  const [commune, setCommune] = useState("");
+  const [primaryTrade, setPrimaryTrade] = useState("");
+  const [sectors, setSectors] = useState<EmploymentSector[]>([sector]);
+  const [phone, setPhone] = useState("");
+  const [mobility, setMobility] = useState<Mobility>(isAgriculture ? "needs_transport" : "public_transport");
+  const [terms, setTerms] = useState(false);
 
   React.useEffect(() => {
     setMode(initialMode);
   }, [initialMode]);
 
-  // Login
-  const [identifier, setIdentifier] = useState("");
-  const [password, setPassword] = useState("");
+  const inputClass = "w-full min-h-12 rounded-xl border border-gray-300 px-4 text-base outline-none transition focus:ring-2 focus:ring-emerald-300";
 
-  // Register
-  const [fullName, setFullName] = useState("");
-  const [rutNew, setRutNew] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [pass1, setPass1] = useState("");
-  const [pass2, setPass2] = useState("");
-  const [terms, setTerms] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [rutGoogle, setRutGoogle] = useState("");
+  const changeMode = (nextMode: "login" | "register") => {
+    setMode(nextMode);
+    setRegisterStep(1);
+    setError(null);
+    setSuccess(null);
+  };
 
-  const handleIdentifierChange = (value: string) => {
-    const raw = value.trim();
-    const rawWithoutRutLetters = raw.replace(/[kK]/g, "");
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setSuccess(null);
 
-    if (raw.includes("@") || /[a-zA-Z]/.test(rawWithoutRutLetters)) {
-      setIdentifier(raw.toLowerCase());
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier.trim())) {
+      setError("Ingresa un correo válido.");
       return;
     }
 
-    setIdentifier(formatRut(raw));
-  };
-
-  const handleLogin = async () => {
-    setErr(null);
-    setSuccessMsg(null);
     setLoading(true);
     try {
-      if (!identifier.trim()) {
-        throw new Error("Ingresa tu RUT o Email.");
-      }
-      if (!identifier.includes("@") && !isValidRut(identifier)) {
-        throw new Error("El RUT ingresado no es válido.");
-      }
       await loginWorker(identifier, password);
       onSuccess();
-    } catch (e: any) {
-      setErr(e?.message || "No se pudo iniciar sesión.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRegister = async () => {
-    setErr(null);
-    setSuccessMsg(null);
-    setShowResetCta(false);
-
-    if (!fullName.trim() || !rutNew.trim() || !email.trim() || !pass1) {
-      setErr("Completa todos los campos requeridos (nombre, RUT, email y contraseña).");
-      return;
-    }
-    if (!isValidRut(rutNew)) {
-      setErr("El RUT ingresado no es válido.");
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setErr("Ingresa un email válido.");
-      return;
-    }
-    if (pass1.length < 6) {
-      setErr("La contraseña debe tener al menos 6 caracteres.");
-      return;
-    }
-    if (pass1 !== pass2) {
-      setErr("Las contraseñas no coinciden.");
-      return;
-    }
-    if (!terms) {
-      setErr("Debes aceptar los términos y condiciones.");
-      return;
-    }
-    if (phone.trim() && phone.trim().length !== 8) {
-      setErr("El teléfono debe tener 8 dígitos.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await registerWorker({ fullName, rut: rutNew, phone, email, password: pass1 });
-      onSuccess();
-    } catch (e: any) {
-      const code = String(e?.code || "");
-      if (code.includes("auth/email-already-in-use")) {
-        setErr("Este correo ya está registrado. Inicia sesión o recupera tu clave.");
-        setShowResetCta(true);
-        setIdentifier(email.trim().toLowerCase());
-      } else if (code.includes("auth/weak-password")) {
-        setErr("La contraseña es muy débil.");
-      } else if (code.includes("permission-denied")) {
-        setErr("No tienes permisos para crear el perfil. Contacta soporte.");
-      } else {
-        setErr(e?.message || "No se pudo crear la cuenta.");
-      }
+    } catch (loginError: any) {
+      setError(loginError?.message || "No se pudo iniciar sesión.");
     } finally {
       setLoading(false);
     }
   };
 
   const handlePasswordReset = async () => {
-    setErr(null);
-    setSuccessMsg(null);
-
-    if (!identifier.trim()) {
-      setErr("Ingresa tu email o RUT para recuperar tu clave.");
+    setError(null);
+    setSuccess(null);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier.trim())) {
+      setError("Escribe tu correo para recuperar la clave.");
       return;
     }
 
     try {
-      const emailUsed = await sendWorkerPasswordReset(identifier);
-      setSuccessMsg(`Te enviamos un correo de recuperación a ${emailUsed}.`);
-    } catch (e: any) {
-      setErr(e?.message || "No se pudo enviar el correo de recuperación.");
+      const usedEmail = await sendWorkerPasswordReset(identifier);
+      setSuccess(`Enviamos las instrucciones a ${usedEmail}.`);
+    } catch (resetError: any) {
+      setError(resetError?.message || "No se pudo enviar el correo.");
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setErr(null);
-    setSuccessMsg(null);
+  const handleGoogle = async () => {
+    setError(null);
+    setSuccess(null);
     setLoading(true);
     try {
-      const { needsRut: needsRutFlag } = await signInWorkerWithGoogle();
-      if (needsRutFlag) {
-        setNeedsRut(true);
-        return;
-      }
+      await signInWorkerWithGoogle();
       onSuccess();
-    } catch (e: any) {
-      setErr(e?.message || "No se pudo iniciar sesión con Google.");
+    } catch (googleError: any) {
+      setError(googleError?.message || "No se pudo continuar con Google.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSaveRutGoogle = async () => {
-    setErr(null);
-    setSuccessMsg(null);
+  const toggleSector = (value: EmploymentSector) => {
+    setSectors((current) => (
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    ));
+  };
 
-    if (!rutGoogle.trim()) {
-      setErr("Ingresa tu RUT para completar el perfil.");
-      return;
-    }
-    if (!isValidRut(rutGoogle)) {
-      setErr("El RUT ingresado no es válido.");
-      return;
+  const validateCurrentStep = () => {
+    setError(null);
+
+    if (registerStep === 1) {
+      if (!fullName.trim() || !email.trim() || !pass1 || !pass2) {
+        setError("Completa tu nombre, correo y contraseña.");
+        return false;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+        setError("Ingresa un correo válido.");
+        return false;
+      }
+      if (pass1.length < 6) {
+        setError("La contraseña debe tener al menos 6 caracteres.");
+        return false;
+      }
+      if (pass1 !== pass2) {
+        setError("Las contraseñas no coinciden.");
+        return false;
+      }
     }
 
-    const currentUser = auth.currentUser;
-    if (!currentUser?.uid || !currentUser.email) {
-      setErr("No encontramos tu sesión. Intenta ingresar nuevamente.");
+    if (registerStep === 2) {
+      if (!commune.trim() || !primaryTrade.trim()) {
+        setError("Indica tu comuna y el trabajo que sabes hacer.");
+        return false;
+      }
+      if (sectors.length === 0) {
+        setError("Selecciona al menos un tipo de trabajo.");
+        return false;
+      }
+    }
+
+    if (registerStep === 3) {
+      if (phone.trim() && phone.trim().length !== 8) {
+        setError("El teléfono debe tener 8 dígitos.");
+        return false;
+      }
+      if (!terms) {
+        setError("Debes aceptar los términos para crear tu cuenta.");
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const handleRegister = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!validateCurrentStep()) return;
+
+    if (registerStep < 3) {
+      setRegisterStep((step) => step + 1);
       return;
     }
 
     setLoading(true);
     try {
-      await updateWorkerRut(currentUser.uid, rutGoogle, currentUser.email);
-      setNeedsRut(false);
-      setSuccessMsg("RUT guardado correctamente.");
+      await registerWorker({
+        fullName,
+        email,
+        password: pass1,
+        phone,
+        commune,
+        primaryTrade,
+        sectors,
+        mobility,
+      });
       onSuccess();
-    } catch (e: any) {
-      setErr(e?.message || "No se pudo guardar el RUT.");
+    } catch (registerError: any) {
+      const code = String(registerError?.code || "");
+      if (code.includes("email-already-in-use")) {
+        setError("Este correo ya está registrado. Puedes ingresar o recuperar tu clave.");
+        setIdentifier(email.trim().toLowerCase());
+      } else {
+        setError(registerError?.message || "No se pudo crear la cuenta.");
+      }
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-100">
-          <div className="flex items-center justify-between">
+    <div className={[
+      "min-h-screen flex items-center justify-center p-4 sm:p-6",
+      isAgriculture ? "bg-emerald-50" : "bg-slate-100",
+    ].join(" ")}>
+      <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-xl">
+        <header className="border-b border-gray-100 p-6">
+          <div className="flex items-center justify-between gap-4">
             <div>
-              <div className="text-2xl font-extrabold text-emerald-800">AgroConnect</div>
-              <div className="text-xs font-semibold text-emerald-600">CHILE</div>
+              <div className={[
+                "text-2xl font-black tracking-tight",
+                isAgriculture ? "text-emerald-900" : "text-blue-950",
+              ].join(" ")}>{experience.brand}</div>
+              <div className="mt-1 text-xs font-bold uppercase tracking-wider text-gray-500">
+                Una plataforma de MundoConnect
+              </div>
             </div>
-            {onBack && (
-              <button onClick={onBack} className="text-sm text-gray-600 hover:text-gray-900">
-                Volver
-              </button>
-            )}
+            {onBack && <button onClick={onBack} className="min-h-11 px-3 text-sm font-bold text-gray-600">Volver</button>}
           </div>
 
-          <div className="mt-6 grid grid-cols-2 gap-2">
+          <div className="mt-6 grid grid-cols-2 gap-2 rounded-2xl bg-gray-100 p-1">
             <button
-              onClick={() => setMode("login")}
-              className={`py-2 rounded-lg text-sm font-bold transition-all ${
-                mode === "login"
-                  ? "bg-emerald-600 text-white shadow-md"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-              }`}
+              onClick={() => changeMode("login")}
+              className={`min-h-11 rounded-xl text-sm font-extrabold ${mode === "login" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}
             >
-              Ingreso trabajador
+              Ya tengo cuenta
             </button>
             <button
-              onClick={() => setMode("register")}
-              className={`py-3 rounded-lg text-sm font-bold uppercase transform transition-all ${
-                mode === "register"
-                  ? "bg-emerald-500 text-white shadow-lg ring-2 ring-offset-2 ring-emerald-400"
-                  : "bg-emerald-400 text-white hover:bg-emerald-500 animate-pulse"
-              }`}
+              onClick={() => changeMode("register")}
+              className={`min-h-11 rounded-xl text-sm font-extrabold ${mode === "register" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}
             >
-              Regístrate aquí
+              Crear cuenta
             </button>
           </div>
-        </div>
+        </header>
 
         <div className="p-6">
           {mode === "login" ? (
-            <>
-              <h2 className="text-lg font-extrabold text-gray-900">INGRESO TRABAJADOR</h2>
-
-              <div className="mt-4 space-y-3">
-                <input
-                  value={identifier}
-                  onChange={(e) => handleIdentifierChange(e.target.value)}
-                  placeholder="RUT o Email"
-                  className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
-                />
-                <div className="relative">
-                  <input
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Contraseña"
-                    type={showPassword ? "text" : "password"}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
-                  />
-                  <button onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 px-4 flex items-center text-gray-500">
-                    {showPassword ? <FiEyeOff /> : <FiEye />}
-                  </button>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handlePasswordReset}
-                  className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 text-left"
-                >
-                  ¿Olvidaste tu clave?
-                </button>
-
-                <button
-                  onClick={handleLogin}
-                  disabled={loading}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-extrabold py-3 rounded-xl transition-all shadow-md hover:shadow-lg"
-                >
-                  {loading ? "Ingresando..." : "INICIAR SESIÓN"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  disabled={loading}
-                  className="w-full border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-bold py-3 rounded-xl transition-all shadow-sm"
-                >
-                  Continuar con Google
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <h1 className="text-2xl font-black text-gray-900">Ingresa a tus oportunidades</h1>
+                <p className="mt-2 text-base text-gray-600">Usa tu correo o continúa con Google.</p>
+              </div>
+              <input value={identifier} onChange={(event) => setIdentifier(event.target.value.toLowerCase())} className={inputClass} type="email" autoComplete="email" placeholder="Tu correo" aria-label="Correo" />
+              <div className="relative">
+                <input value={password} onChange={(event) => setPassword(event.target.value)} className={`${inputClass} pr-12`} type={showPassword ? "text" : "password"} autoComplete="current-password" placeholder="Tu contraseña" aria-label="Contraseña" />
+                <button type="button" aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"} onClick={() => setShowPassword((visible) => !visible)} className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-gray-500">
+                  {showPassword ? <FiEyeOff /> : <FiEye />}
                 </button>
               </div>
-            </>
+              <button type="button" onClick={handlePasswordReset} className="min-h-11 text-sm font-bold text-emerald-800">Olvidé mi clave</button>
+              <button disabled={loading} className="min-h-14 w-full rounded-2xl bg-emerald-700 text-base font-black text-white disabled:opacity-60">
+                {loading ? "Ingresando..." : "Ingresar"}
+              </button>
+              <button type="button" onClick={handleGoogle} disabled={loading} className="min-h-14 w-full rounded-2xl border border-gray-300 bg-white text-base font-black text-gray-800 disabled:opacity-60">
+                Continuar con Google
+              </button>
+            </form>
           ) : (
-            <>
-              <h2 className="text-lg font-extrabold text-gray-900">Crea tu Cuenta</h2>
-              <p className="text-sm text-gray-600 mt-1">Regístrate para postular a ofertas.</p>
+            <form onSubmit={handleRegister} className="space-y-5">
+              <div>
+                <div className="flex items-center justify-between text-sm font-bold text-gray-500">
+                  <span>Paso {registerStep} de 3</span>
+                  <span>{registerStep === 1 ? "Tu cuenta" : registerStep === 2 ? "Tu trabajo" : "Tu movilidad"}</span>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {[1, 2, 3].map((step) => <span key={step} className={`h-2 rounded-full ${step <= registerStep ? "bg-emerald-600" : "bg-gray-200"}`} />)}
+                </div>
+              </div>
 
-              <div className="mt-4 space-y-3">
-                <input
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value.replace(/[^a-zA-Z\s]/g, ''))}
-                  placeholder="Nombre Completo"
-                  className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
-                />
-                <input
-                  value={rutNew}
-                  onChange={(e) => setRutNew(formatRut(e.target.value))}
-                  placeholder="RUT (Ej: 12.345.678-9)"
-                  className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
-                />
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Email"
-                  type="email"
-                  className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
-                />
-                <div className="flex gap-2">
-                  <div className="w-20 border border-gray-300 rounded-xl px-3 py-3 text-gray-500 text-sm bg-gray-50">
-                    +569
+              {registerStep === 1 && (
+                <div className="space-y-4">
+                  <div>
+                    <h1 className="text-2xl font-black text-gray-900">Crea tu cuenta gratuita</h1>
+                    <p className="mt-2 text-base text-gray-600">No necesitas currículum para comenzar.</p>
                   </div>
-                  <input
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value.replace(/[^0-9]/g, ''))}
-                    placeholder="8 dígitos (opcional)"
-                    maxLength={8}
-                    className="flex-1 border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
-                  />
-                </div>
-                 <div className="relative">
-                  <input
-                    value={pass1}
-                    onChange={(e) => setPass1(e.target.value)}
-                    placeholder="Contraseña"
-                    type={showPassword ? "text" : "password"}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all pr-10"
-                  />
-                   <div className="absolute inset-y-0 right-10 flex items-center pr-3 cursor-pointer group">
-                     <FiInfo className="text-gray-400" />
-                     <div className="absolute right-full mr-2 w-48 bg-gray-700 text-white text-xs rounded-lg py-2 px-3 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                       Mínimo 6 caracteres.
-                     </div>
-                   </div>
-                  <button onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 px-4 flex items-center text-gray-500">
-                    {showPassword ? <FiEyeOff /> : <FiEye />}
+                  <button type="button" onClick={handleGoogle} disabled={loading} className="min-h-14 w-full rounded-2xl border border-gray-300 bg-white text-base font-black text-gray-800">
+                    Continuar con Google
                   </button>
-                </div>
-                <input
-                  value={pass2}
-                  onChange={(e) => setPass2(e.target.value)}
-                  placeholder="Confirmar Contraseña"
-                  type={showPassword ? "text" : "password"}
-                  className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-300 transition-all"
-                />
-
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-gray-700">
-                  <div className="font-extrabold text-blue-800 mb-1">RESUMEN LEGAL TRABAJADOR</div>
-                  <ul className="list-disc pl-4 space-y-1">
-                    <li>AgroConnect NO es tu empleador.</li>
-                    <li>La empresa que te contrata es responsable del trabajo y del pago.</li>
-                    <li>Tus datos se comparten con empresas para ofrecerte trabajo.</li>
-                    <li>Usamos tu ubicación solo para mostrar trabajos cercanos.</li>
-                    <li>Puedes apagar tu perfil o borrarlo cuando quieras.</li>
-                    <li>Puedes recibir mensajes por WhatsApp o SMS (opcional).</li>
-                  </ul>
-                </div>
-
-                <label className="flex items-center gap-2 text-sm text-gray-700">
-                  <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} className="rounded text-emerald-600 focus:ring-emerald-500"/>
-                  Acepto términos y condiciones
-                </label>
-
-                <button
-                  onClick={handleRegister}
-                  disabled={loading}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-extrabold py-3 rounded-xl transition-all shadow-md hover:shadow-lg"
-                >
-                  {loading ? "Creando..." : "CREAR PERFIL"}
-                </button>
-              </div>
-            </>
-          )}
-
-          {needsRut && (
-            <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <div className="text-sm font-extrabold text-amber-800">Completa tu RUT</div>
-              <p className="text-xs text-amber-700 mt-1">
-                Para finalizar el acceso con Google necesitamos tu RUT.
-              </p>
-              <div className="mt-3 flex flex-col gap-2">
-                <input
-                  value={rutGoogle}
-                  onChange={(e) => setRutGoogle(formatRut(e.target.value))}
-                  placeholder="RUT (Ej: 12.345.678-9)"
-                  className="w-full border border-amber-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-amber-300 transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={handleSaveRutGoogle}
-                  disabled={loading}
-                  className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-extrabold py-2 rounded-xl transition-all"
-                >
-                  Guardar RUT
-                </button>
-              </div>
-            </div>
-          )}
-
-          {err && (
-            <div className="mt-4 text-sm text-red-700 bg-red-100 border border-red-300 p-3 rounded-lg">
-              {err}
-              {showResetCta && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setMode("login")}
-                    className="text-xs font-bold text-emerald-700 hover:text-emerald-900"
-                  >
-                    Ir a Ingreso
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handlePasswordReset}
-                    className="text-xs font-bold text-emerald-700 hover:text-emerald-900"
-                  >
-                    Recuperar clave
-                  </button>
+                  <div className="text-center text-sm font-bold text-gray-400">o usa tu correo</div>
+                  <input value={fullName} onChange={(event) => setFullName(event.target.value.replace(/[^\p{L}\p{M}\s'-]/gu, ""))} className={inputClass} autoComplete="name" placeholder="Nombre y apellido" aria-label="Nombre y apellido" />
+                  <input value={email} onChange={(event) => setEmail(event.target.value.toLowerCase())} className={inputClass} type="email" autoComplete="email" placeholder="Correo" aria-label="Correo" />
+                  <div className="relative">
+                    <input value={pass1} onChange={(event) => setPass1(event.target.value)} className={`${inputClass} pr-12`} type={showPassword ? "text" : "password"} autoComplete="new-password" placeholder="Crea una contraseña" aria-label="Crear contraseña" />
+                    <button type="button" aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"} onClick={() => setShowPassword((visible) => !visible)} className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-gray-500">
+                      {showPassword ? <FiEyeOff /> : <FiEye />}
+                    </button>
+                  </div>
+                  <input value={pass2} onChange={(event) => setPass2(event.target.value)} className={inputClass} type={showPassword ? "text" : "password"} autoComplete="new-password" placeholder="Repite la contraseña" aria-label="Repetir contraseña" />
                 </div>
               )}
-            </div>
+
+              {registerStep === 2 && (
+                <div className="space-y-4">
+                  <div>
+                    <h1 className="text-2xl font-black text-gray-900">¿Qué trabajo buscas?</h1>
+                    <p className="mt-2 text-base text-gray-600">Esto nos permite mostrar oportunidades útiles.</p>
+                  </div>
+                  <input value={commune} onChange={(event) => setCommune(event.target.value)} className={inputClass} autoComplete="address-level2" placeholder="Comuna donde vives" aria-label="Comuna" />
+                  <input value={primaryTrade} onChange={(event) => setPrimaryTrade(event.target.value)} className={inputClass} placeholder={isAgriculture ? "Ejemplo: poda, cosecha o packing" : "Ejemplo: guardia o control de acceso"} aria-label="Trabajo principal" />
+                  <fieldset>
+                    <legend className="mb-3 text-base font-black text-gray-900">También me interesan</legend>
+                    <div className="grid grid-cols-2 gap-3">
+                      {(["agriculture", "security"] as EmploymentSector[]).map((item) => (
+                        <button key={item} type="button" onClick={() => toggleSector(item)} className={`min-h-14 rounded-2xl border-2 text-sm font-black ${sectors.includes(item) ? "border-emerald-600 bg-emerald-50 text-emerald-900" : "border-gray-200 text-gray-600"}`}>
+                          {item === "agriculture" ? "Agricultura" : "Seguridad"}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                </div>
+              )}
+
+              {registerStep === 3 && (
+                <div className="space-y-4">
+                  <div>
+                    <h1 className="text-2xl font-black text-gray-900">¿Cómo puedes trasladarte?</h1>
+                    <p className="mt-2 text-base text-gray-600">Usaremos esta información para mejorar las recomendaciones.</p>
+                  </div>
+                  <div className="grid gap-3">
+                    {([
+                      ["needs_transport", "Necesito transporte"],
+                      ["public_transport", "Uso locomoción pública"],
+                      ["own_transport", "Tengo transporte propio"],
+                    ] as Array<[Mobility, string]>).map(([value, label]) => (
+                      <button key={value} type="button" onClick={() => setMobility(value)} className={`min-h-14 rounded-2xl border-2 px-4 text-left text-base font-black ${mobility === value ? "border-emerald-600 bg-emerald-50 text-emerald-900" : "border-gray-200 text-gray-700"}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="flex min-h-12 items-center rounded-xl border border-gray-300 bg-gray-50 px-3 text-sm font-bold text-gray-500">+569</span>
+                    <input value={phone} onChange={(event) => setPhone(event.target.value.replace(/[^0-9]/g, ""))} className={inputClass} maxLength={8} inputMode="numeric" autoComplete="tel" placeholder="Teléfono (opcional)" aria-label="Teléfono" />
+                  </div>
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-relaxed text-gray-700">
+                    MundoConnect no es tu empleador. La empresa que contrata es responsable del trabajo y del pago. Tus datos solo se comparten para oportunidades laborales.
+                  </div>
+                  <label className="flex min-h-12 items-center gap-3 text-base font-bold text-gray-800">
+                    <input type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} className="h-5 w-5 accent-emerald-600" />
+                    Acepto los términos y la política de privacidad
+                  </label>
+                  <p className="text-sm text-gray-500">Podrás verificar tu RUT posteriormente desde tu perfil.</p>
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                {registerStep > 1 && <button type="button" onClick={() => { setError(null); setRegisterStep((step) => step - 1); }} className="min-h-14 flex-1 rounded-2xl border border-gray-300 text-base font-black text-gray-700">Volver</button>}
+                <button disabled={loading} className="min-h-14 flex-1 rounded-2xl bg-emerald-700 px-5 text-base font-black text-white disabled:opacity-60">
+                  {loading ? "Creando..." : registerStep === 3 ? "Crear mi cuenta" : "Continuar"}
+                </button>
+              </div>
+            </form>
           )}
 
-          {successMsg && (
-            <div className="mt-4 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 p-3 rounded-lg">
-              {successMsg}
-            </div>
-          )}
-
-          <div className="mt-4 text-[11px] text-gray-500">
-            Nota: Pedimos correo para recuperación y seguimiento. Tu RUT sigue siendo un dato clave del perfil.
-          </div>
+          {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{error}</div>}
+          {success && <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">{success}</div>}
         </div>
       </div>
     </div>

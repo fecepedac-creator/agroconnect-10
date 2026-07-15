@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { Suspense, lazy, useEffect, useState } from "react";
 import {
   addDoc,
   collection,
@@ -12,8 +12,9 @@ import {
   orderBy,
   limit,
 } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
-import { auth, db, syncSuperadminClaims } from "./firebase";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
+import { auth, db, functions, syncSuperadminClaims } from "./firebase";
 
 import {
   LayoutDashboard,
@@ -30,20 +31,6 @@ import {
   PlusCircle,
 } from "lucide-react";
 
-import Dashboard from "./components/Dashboard";
-import PublishOffer from "./components/PublishOffer";
-import CompanySelector from "./components/CompanySelector";
-
-import Workers from "./components/Workers";
-import Jobs from "./components/Jobs";
-import AdminPanel from "./components/AdminPanel";
-import AIReview from "./components/AIReview";
-import WorkerPortal from "./components/WorkerPortal";
-import LoginScreen from "./components/LoginScreen";
-import GlobalSearch from "./components/GlobalSearch";
-import CompanySettings from "./components/CompanySettings";
-import Broadcasts from "./components/Broadcasts";
-import WorkerAuthScreen from "./components/WorkerAuthScreen";
 
 import { Worker, JobOffer, AppView, UserRole, Company, Lead, AdminConfig, WorkerStatus } from "./types";
 import {
@@ -55,8 +42,27 @@ import {
   DEMO_COMPANIES,
 } from "./constants";
 import { getCompanies } from "./services/companies";
-
+import {getExpansionSector} from "./expansionSectors";
 type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
+
+const Dashboard = lazy(() => import("./components/Dashboard"));
+const PublishOffer = lazy(() => import("./components/PublishOffer"));
+const CompanySelector = lazy(() => import("./components/CompanySelector"));
+const Workers = lazy(() => import("./components/Workers"));
+const Jobs = lazy(() => import("./components/Jobs"));
+const AdminPanel = lazy(() => import("./components/AdminPanel"));
+const AIReview = lazy(() => import("./components/AIReview"));
+const WorkerPortal = lazy(() => import("./components/WorkerPortal"));
+const SectorLanding = lazy(() => import("./components/SectorLanding"));
+const MundoLanding = lazy(() => import("./components/MundoLanding"));
+const CompanyAccessScreen = lazy(() => import("./components/CompanyAccessScreen"));
+const AdminAccessScreen = lazy(() => import("./components/AdminAccessScreen"));
+const ExpansionSectorLanding = lazy(() => import("./components/ExpansionSectorLanding"));
+const GlobalSearch = lazy(() => import("./components/GlobalSearch"));
+const CompanySettings = lazy(() => import("./components/CompanySettings"));
+const Broadcasts = lazy(() => import("./components/Broadcasts"));
+const WorkerAuthScreen = lazy(() => import("./components/WorkerAuthScreen"));
+const CompanyMatches = lazy(() => import("./components/CompanyMatches"));
 
 const App: React.FC = () => {
   const [userRole, setUserRole] = useState<UserRole | null>(null);
@@ -140,39 +146,21 @@ const App: React.FC = () => {
   };
 
   const handleInviteWorker = async (worker: Worker) => {
-    // Add to local state (existing behavior)
-    setWorkers((prev) => {
-      if (prev.some((item) => item.id === worker.id)) return prev;
-      return [
-        ...prev,
-        {
-          ...worker,
-          status: worker.status ?? WorkerStatus.PENDING,
-        },
-      ];
-    });
-    
-    // Create invitation record in Firestore
-    if (currentCompany?.id) {
-      try {
-        await addDoc(collection(db, "companies", currentCompany.id, "worker_invitations"), {
-          workerId: worker.id,
-          workerName: worker.name,
-          workerPhone: worker.phone,
-          workerRegion: worker.region,
-          workerSkills: worker.skills,
-          status: "pending",
-          createdAt: serverTimestamp(),
-          createdBy: {
-            uid: auth.currentUser?.uid || null,
-            email: auth.currentUser?.email || null,
-          },
-        });
-        console.log(`[AgroConnect] Invitación creada para ${worker.name}`);
-      } catch (e) {
-        console.error("Error creating invitation:", e);
-      }
+    if (!currentCompany?.id) {
+      throw new Error("Selecciona una empresa antes de invitar.");
     }
+    const activeJob = jobs.find(
+      (job) => job.isActive === true || job.jobStatus === "active"
+    );
+    if (!activeJob) {
+      throw new Error("Primero crea o activa una oferta de trabajo.");
+    }
+    const inviteWorkerToJob = httpsCallable(functions, "inviteWorkerToJob");
+    await inviteWorkerToJob({
+      companyId: currentCompany.id,
+      jobId: activeJob.id,
+      workerId: worker.id,
+    });
   };
 
   const handleRegisterLead = async (leadData: Omit<Lead, "id" | "status" | "createdAt" | "updatedAt">) => {
@@ -185,7 +173,7 @@ const App: React.FC = () => {
       };
       const ref = await addDoc(collection(db, "company_leads"), payload);
       // eslint-disable-next-line no-console
-      console.log(`🚨 [SISTEMA] Nuevo Lead: ${leadData.companyName} (${ref.id})`);
+      console.log(`ðŸš¨ [SISTEMA] Nuevo Lead: ${leadData.companyName} (${ref.id})`);
       return { ok: true };
     } catch (e: any) {
       // eslint-disable-next-line no-console
@@ -194,8 +182,13 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem("adminIntent");
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Error signing out from Firebase Auth:", error);
+    }
     setUserRole(null);
     setCurrentCompany(null);
     setCurrentView(AppView.DASHBOARD);
@@ -307,15 +300,20 @@ const App: React.FC = () => {
     return () => unsub();
   }, [userRole]);
 
-  // Subscribe to public workers pool (for Global Search)
+  // Subscribe to the privacy-safe worker discovery projection.
   useEffect(() => {
+    if (userRole !== UserRole.COMPANY && userRole !== UserRole.ADMIN) {
+      setPublicWorkers([]);
+      setPublicWorkersLoading(false);
+      return;
+    }
     setPublicWorkersLoading(true);
     
     // Query workers that are available (consented) and public
     const q = query(
-      collection(db, "publicWorkers"),
+      collection(db, "discoverableWorkers"),
       where("isAvailable", "==", true),
-      orderBy("createdAt", "desc"),
+      orderBy("updatedAt", "desc"),
       limit(100)
     );
     
@@ -326,13 +324,12 @@ const App: React.FC = () => {
           const data = d.data();
           return {
             id: d.id,
-            name: data.name || "",
-            rut: data.rut || "",
-            phone: data.phone || "",
-            region: data.region || "",
+            name: data.displayName || "Trabajador",
+            rut: "",
+            phone: "",
+            region: data.commune || data.region || "",
             status: data.status || WorkerStatus.CONSENTED,
             skills: data.skills || [],
-            coordinates: data.coordinates || null,
           } as Worker;
         });
         setPublicWorkers(list);
@@ -346,7 +343,7 @@ const App: React.FC = () => {
       }
     );
     return () => unsub();
-  }, []);
+  }, [userRole]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -415,16 +412,9 @@ const App: React.FC = () => {
 
   if (path.startsWith("/admin") && authReady && roleReady && authUserEmail == null) {
     return (
-      <div className="min-h-screen bg-gray-50 font-sans">
-        <LoginScreen
-          companies={companies}
-          companiesLoading={companiesLoading}
-          companiesError={companiesError}
-          onRetryCompanies={loadCompanies}
-          onSelectRole={handleRoleSelect}
-          onRegisterLead={handleRegisterLead}
-        />
-      </div>
+      <Suspense fallback={<div className="min-h-screen bg-[#080b12]" />}>
+        <AdminAccessScreen onAuthorized={() => handleRoleSelect(UserRole.ADMIN)} />
+      </Suspense>
     );
   }
 
@@ -435,7 +425,8 @@ const App: React.FC = () => {
           <h2 className="text-xl font-extrabold text-gray-900">No autorizado</h2>
           <p className="text-sm text-gray-500 mt-2">No tienes permisos para acceder al panel administrativo.</p>
           <button
-            onClick={() => {
+            onClick={async () => {
+              await signOut(auth);
               window.history.pushState({}, "", "/");
               setPath("/");
             }}
@@ -456,8 +447,48 @@ const App: React.FC = () => {
     );
   }
 
+  if (path === "/agro" || path === "/seguridad") {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <SectorLanding sector={path === "/seguridad" ? "security" : "agriculture"} />
+      </Suspense>
+    );
+  }
+
+  if (path === "/") {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <MundoLanding />
+      </Suspense>
+    );
+  }
+
+  const expansionSector = getExpansionSector(path);
+  if (expansionSector) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <ExpansionSectorLanding sector={expansionSector} />
+      </Suspense>
+    );
+  }
+
+  if ((path === "/portal-empresas" || path === "/acceso") && userRole === null) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <CompanyAccessScreen
+          onAuthorized={(company) => handleRoleSelect(UserRole.COMPANY, company)}
+          onRegisterLead={handleRegisterLead}
+        />
+      </Suspense>
+    );
+  }
+
   if (path.startsWith("/trabajos") || path.startsWith("/worker") || path.startsWith("/auth")) {
-    return <WorkerPortal />;
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center p-6"><div className="text-sm text-gray-500">Cargando portal...</div></div>}>
+        <WorkerPortal sector={new URLSearchParams(window.location.search).get("sector") === "security" ? "security" : "agriculture"} />
+      </Suspense>
+    );
   }
 
   const handleAdminConfigSave = async (config: AdminConfig) => {
@@ -496,19 +527,11 @@ const App: React.FC = () => {
     );
   }
 
-  // ✅ Evita overlay: si no hay rol seleccionado, SOLO se muestra LoginScreen (landing).
   if (userRole === null && !path.startsWith("/admin")) {
     return (
-      <div className="min-h-screen bg-gray-50 font-sans">
-        <LoginScreen
-          companies={companies}
-          companiesLoading={companiesLoading}
-          companiesError={companiesError}
-          onRetryCompanies={loadCompanies}
-          onSelectRole={handleRoleSelect}
-          onRegisterLead={handleRegisterLead}
-        />
-      </div>
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <MundoLanding />
+      </Suspense>
     );
   }
 
@@ -548,6 +571,7 @@ const App: React.FC = () => {
 
               <div className="pt-4 pb-1 px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Reclutamiento</div>
               <NavItem view={AppView.GLOBAL_SEARCH} icon={Globe} label="Buscar Talento" />
+              <NavItem view={AppView.MATCHES} icon={Briefcase} label="Matches" />
 
               <div className="pt-4 pb-1 px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">
                 Configuración
@@ -561,6 +585,7 @@ const App: React.FC = () => {
               <NavItem view={AppView.ADMIN} icon={LayoutDashboard} label="Panel SuperAdmin" />
               <NavItem view={AppView.DASHBOARD} icon={LayoutDashboard} label="Dashboard" />
               <NavItem view={AppView.GLOBAL_SEARCH} icon={Globe} label="Global Search" />
+              <NavItem view={AppView.MATCHES} icon={Briefcase} label="Matches" />
               <NavItem view={AppView.WORKERS} icon={Users} label="Trabajadores" />
               <NavItem view={AppView.JOBS} icon={Briefcase} label="Ofertas" />
               <NavItem view={AppView.PUBLISH_OFFER} icon={PlusCircle} label="Publicar oferta" />
@@ -593,7 +618,7 @@ const App: React.FC = () => {
             <div className="text-sm text-gray-500">{currentCompany?.name}</div>
           </div>
           <button
-            onClick={handleLogout}
+            onClick={() => void handleLogout()}
             className="text-sm font-bold text-gray-500 hover:text-gray-700 flex items-center gap-2"
           >
             <LogOut size={16} />
@@ -602,6 +627,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Content */}
+        <Suspense fallback={<div className="text-sm text-gray-500">Cargando modulo...</div>}>
         <div className="p-6">
           {currentView === AppView.DASHBOARD && (
             <Dashboard
@@ -676,6 +702,13 @@ const App: React.FC = () => {
               currentCompany={currentCompany}
             />
           )}
+          {currentView === AppView.MATCHES && (
+            currentCompany ? (
+              <CompanyMatches company={currentCompany} />
+            ) : (
+              <div className="text-sm text-gray-500">Selecciona una empresa para ver sus matches.</div>
+            )
+          )}
           {currentView === AppView.SETTINGS_COMPANY &&
             (userRole === UserRole.ADMIN ? (
               currentCompany ? (
@@ -715,12 +748,15 @@ const App: React.FC = () => {
           {currentView === AppView.AI_REVIEW && <AIReview />}
           {currentView === AppView.WORKER_PORTAL && <WorkerPortal />}
           {currentView === AppView.WORKER_AUTH && (
-            <WorkerAuthScreen onSuccess={() => setCurrentView(AppView.WORKER_PORTAL)} onBack={handleLogout} />
+            <WorkerAuthScreen onSuccess={() => setCurrentView(AppView.WORKER_PORTAL)} onBack={() => void handleLogout()} />
           )}
         </div>
+        </Suspense>
       </main>
     </div>
   );
 };
 
 export default App;
+
+

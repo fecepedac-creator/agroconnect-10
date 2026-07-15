@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
 import {
   collection,
   collectionGroup,
@@ -8,8 +9,7 @@ import {
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
-  setDoc,
+  where,
 } from "firebase/firestore";
 import {
   Briefcase,
@@ -18,19 +18,21 @@ import {
   CheckCircle2,
   ClipboardList,
   FileText,
-  Lock,
   LogOut,
   MapPin,
   ShieldCheck,
-  User as UserIcon,
 } from "lucide-react";
-import { auth, db } from "../firebase";
+import { auth, db, functions } from "../firebase";
 import { logoutWorker } from "../services/workerAuth";
 import WorkerAuthScreen from "./WorkerAuthScreen";
+import WorkerProfileEditor, {type EditableWorkerProfile} from "./WorkerProfileEditor";
+import WorkerCredentialsPanel from "./WorkerCredentialsPanel";
 import type { JobOffer } from "../types";
+import {SECTOR_EXPERIENCES, sectorQuery, type EmploymentSector} from "../sectorExperience";
 
 type WorkerPortalProps = {
   onExit?: () => void;
+  sector?: EmploymentSector;
 };
 
 type JobListing = JobOffer & {
@@ -39,11 +41,7 @@ type JobListing = JobOffer & {
   companyName?: string;
 };
 
-type WorkerProfile = {
-  fullName?: string;
-  rut?: string;
-  phone?: string;
-};
+type WorkerProfile = EditableWorkerProfile;
 
 type WorkerDocument = {
   id: string;
@@ -62,6 +60,22 @@ type WorkerApplication = {
   status?: string;
 };
 
+type WorkerMatch = {
+  id: string;
+  jobTitle?: string;
+  companyName?: string;
+  state?: string;
+  companyDecision?: string;
+  workerDecision?: string;
+};
+
+type MatchContact = {
+  phone?: string | null;
+  email?: string | null;
+};
+
+type ReviewState = "loading" | "not-reviewed" | "reviewed" | "error";
+
 const usePath = () => {
   const [path, setPath] = useState(window.location.pathname);
 
@@ -72,9 +86,10 @@ const usePath = () => {
   }, []);
 
   const navigate = useCallback((to: string) => {
-    if (to === window.location.pathname) return;
-    window.history.pushState({}, "", to);
-    setPath(to);
+    const nextUrl = new URL(to, window.location.origin);
+    if (`${nextUrl.pathname}${nextUrl.search}` === `${window.location.pathname}${window.location.search}`) return;
+    window.history.pushState({}, "", `${nextUrl.pathname}${nextUrl.search}`);
+    setPath(nextUrl.pathname);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
@@ -137,6 +152,7 @@ const useJobs = (mode: "public" | "private") => {
             coordinates: data.coordinates ?? { lat: 0, lng: 0 },
             isActive: data.isActive ?? false,
             jobStatus: data.jobStatus ?? (data.isActive ? "active" : "future"),
+            sector: data.sector ?? "agriculture",
             category: data.category ?? "Otros",
             paymentType: data.paymentType,
             payMode: data.payMode,
@@ -144,7 +160,16 @@ const useJobs = (mode: "public" | "private") => {
             payDetail: data.payDetail,
             skillsRequired: data.skillsRequired,
             benefits: data.benefits,
+            transportMode: data.transportMode,
             transportInfo: data.transportInfo,
+            pickupPoints: data.pickupPoints,
+            departureTime: data.departureTime,
+            returnTime: data.returnTime,
+            transportCost: data.transportCost,
+            shiftType: data.shiftType,
+            shiftPattern: data.shiftPattern,
+            requiresOs10: data.requiresOs10,
+            facilityType: data.facilityType,
             otherBenefits: data.otherBenefits,
             companyId,
             companyName,
@@ -185,6 +210,31 @@ const useWorkerApplications = (uid?: string) => {
   return applications;
 };
 
+const useWorkerMatches = (uid?: string) => {
+  const [matches, setMatches] = useState<WorkerMatch[]>([]);
+
+  useEffect(() => {
+    if (!uid) {
+      setMatches([]);
+      return;
+    }
+    const matchesQuery = query(
+      collection(db, "matches"),
+      where("workerId", "==", uid),
+      orderBy("updatedAt", "desc")
+    );
+    const unsub = onSnapshot(matchesQuery, (snap) => {
+      setMatches(snap.docs.map((matchDoc) => ({
+        id: matchDoc.id,
+        ...(matchDoc.data() as Omit<WorkerMatch, "id">),
+      })));
+    });
+    return () => unsub();
+  }, [uid]);
+
+  return matches;
+};
+
 const RegisterCTASticky = ({ onClick }: { onClick: () => void }) => (
   <div className="fixed bottom-0 inset-x-0 z-40 bg-emerald-600 text-white">
     <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -199,28 +249,34 @@ const RegisterCTASticky = ({ onClick }: { onClick: () => void }) => (
   </div>
 );
 
-const LockedSection = ({ title, children }: { title: string; children: React.ReactNode }) => (
-  <div className="relative rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/50 p-5">
-    <div className="absolute inset-0 flex flex-col items-center justify-center text-center gap-2 text-emerald-700">
-      <Lock size={20} />
-      <p className="text-xs font-black uppercase tracking-widest">{title}</p>
-      <p className="text-[11px] font-semibold text-emerald-700/80">Regístrate gratis para desbloquear</p>
-    </div>
-    <div className="blur-sm opacity-60 select-none pointer-events-none">{children}</div>
-  </div>
-);
+const SectorBrand = ({sector}: {sector: EmploymentSector}) => {
+  const experience = SECTOR_EXPERIENCES[sector];
+  const isAgriculture = sector === "agriculture";
 
-const PublicLayout = ({ children, onAuthClick }: { children: React.ReactNode; onAuthClick: () => void }) => (
+  return (
+    <div className="flex items-center gap-2">
+      <div className={[
+        "flex h-10 w-10 items-center justify-center rounded-2xl text-white font-black",
+        isAgriculture ? "bg-emerald-700" : "bg-blue-950",
+      ].join(" ")}>
+        {isAgriculture ? "A" : "S"}
+      </div>
+      <div>
+        <div className="text-base font-extrabold text-gray-900">{experience.brand}</div>
+        <div className={[
+          "text-[11px] font-bold uppercase tracking-wide",
+          isAgriculture ? "text-emerald-700" : "text-blue-800",
+        ].join(" ")}>Trabajo cerca de ti</div>
+      </div>
+    </div>
+  );
+};
+
+const PublicLayout = ({ children, onAuthClick, sector }: { children: React.ReactNode; onAuthClick: () => void; sector: EmploymentSector }) => (
   <div className="min-h-screen bg-gray-50 text-gray-900">
     <header className="bg-white border-b border-gray-100 sticky top-0 z-30">
       <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="h-9 w-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black">A</div>
-          <div>
-            <div className="text-base font-extrabold text-gray-900">AgroConnect</div>
-            <div className="text-[10px] font-semibold text-emerald-600 uppercase">Portal Trabajador</div>
-          </div>
-        </div>
+        <SectorBrand sector={sector} />
         <button onClick={onAuthClick} className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
           Ingresar / Registrarme
         </button>
@@ -230,17 +286,11 @@ const PublicLayout = ({ children, onAuthClick }: { children: React.ReactNode; on
   </div>
 );
 
-const WorkerLayout = ({ children, onNavigate, onLogout }: { children: React.ReactNode; onNavigate: (to: string) => void; onLogout: () => void }) => (
+const WorkerLayout = ({ children, onNavigate, onLogout, sector }: { children: React.ReactNode; onNavigate: (to: string) => void; onLogout: () => void; sector: EmploymentSector }) => (
   <div className="min-h-screen bg-gray-50 text-gray-900">
     <header className="bg-white border-b border-gray-100 sticky top-0 z-30">
       <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <div className="h-9 w-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black">A</div>
-          <div>
-            <div className="text-base font-extrabold text-gray-900">AgroConnect</div>
-            <div className="text-[10px] font-semibold text-emerald-600 uppercase">Portal Trabajador</div>
-          </div>
-        </div>
+        <SectorBrand sector={sector} />
         <nav className="flex flex-wrap gap-2">
           <button onClick={() => onNavigate("/trabajos")} className="px-3 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700">
             Ofertas
@@ -295,6 +345,18 @@ const JobCardPublic = ({ job, onSelect }: { job: JobListing; onSelect: () => voi
         </div>
       </div>
     </div>
+    <div className="mt-4 flex flex-wrap gap-2 text-sm font-bold">
+      {(job.sector ?? "agriculture") === "agriculture" ? (
+        <span className="rounded-full bg-emerald-50 px-3 py-2 text-emerald-800">
+          {job.transportMode === "employer_transport" ? "Transporte incluido" : job.transportMode === "worker_own" ? "Llegada por cuenta propia" : "Transporte por confirmar"}
+        </span>
+      ) : (
+        <>
+          <span className="rounded-full bg-blue-50 px-3 py-2 text-blue-900">Turno {job.shiftType === "night" ? "noche" : job.shiftType === "rotating" ? "rotativo" : "día"}</span>
+          {job.requiresOs10 && <span className="rounded-full bg-amber-50 px-3 py-2 text-amber-900">OS10 requerido</span>}
+        </>
+      )}
+    </div>
   </button>
 );
 
@@ -334,13 +396,21 @@ const JobCardPrivate = ({ job, onSelect, applied }: { job: JobListing; onSelect:
             <CheckCircle2 size={14} /> Ya postulado
           </span>
         )}
+        {(job.sector ?? "agriculture") === "agriculture" && job.transportMode === "employer_transport" && (
+          <span className="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full">Transporte incluido</span>
+        )}
+        {job.sector === "security" && (
+          <span className="bg-blue-50 text-blue-900 px-3 py-1 rounded-full">Turno {job.shiftPattern || job.shiftType || "por confirmar"}</span>
+        )}
       </div>
     </div>
   </button>
 );
 
-const JobDetailPublic = ({ job }: { job: JobListing }) => (
-  <div className="space-y-6">
+const JobDetailPublic = ({ job }: { job: JobListing }) => {
+  const isAgriculture = (job.sector ?? "agriculture") === "agriculture";
+
+  return <div className="space-y-6">
     <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
       <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
         {job.category}
@@ -358,27 +428,34 @@ const JobDetailPublic = ({ job }: { job: JobListing }) => (
         </div>
       </div>
       <p className="text-sm text-gray-500 mt-6 leading-relaxed">
-        {job.description ? `${job.description.slice(0, 180)}...` : "Detalles en proceso de publicación."}
+        {job.description || "Detalles en proceso de publicación."}
       </p>
     </div>
 
-    <LockedSection title="Pago y beneficios">
-      <div className="flex flex-wrap gap-2 text-xs text-gray-600 font-semibold">
-        <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">Pago: {job.paymentType || "Por definir"}</span>
-        <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">Beneficios adicionales</span>
-        <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full">Transporte incluido</span>
+    <section className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
+      <h3 className="text-lg font-black text-gray-900">Condiciones importantes</h3>
+      <div className="mt-4 flex flex-wrap gap-2 text-sm font-bold text-gray-700">
+        <span className="rounded-full bg-blue-50 px-3 py-2 text-blue-800">Pago: {job.payAmount ? `$${job.payAmount.toLocaleString("es-CL")}` : job.paymentType || "Por confirmar"}</span>
+        {isAgriculture ? (
+          <span className="rounded-full bg-emerald-50 px-3 py-2 text-emerald-800">
+            {job.transportMode === "employer_transport" ? "Transporte proporcionado" : job.transportMode === "transport_allowance" ? "Asignación de movilización" : job.transportMode === "worker_own" ? "Llegada por cuenta propia" : "Transporte por confirmar"}
+          </span>
+        ) : (
+          <>
+            <span className="rounded-full bg-slate-100 px-3 py-2 text-slate-800">Turno {job.shiftPattern || job.shiftType || "por confirmar"}</span>
+            <span className="rounded-full bg-amber-50 px-3 py-2 text-amber-900">{job.requiresOs10 ? "OS10 requerido" : "OS10 no obligatorio"}</span>
+          </>
+        )}
       </div>
-    </LockedSection>
-
-    <LockedSection title="Requisitos completos">
-      <div className="text-sm text-gray-600 space-y-2">
-        <p>Experiencia previa en faenas agrícolas.</p>
-        <p>Disponibilidad inmediata y puntualidad.</p>
-        <p>Documentación al día.</p>
+      <div className="mt-5 space-y-2 text-base leading-relaxed text-gray-600">
+        {isAgriculture && job.pickupPoints && <p><strong className="text-gray-900">Puntos de encuentro:</strong> {job.pickupPoints}</p>}
+        {isAgriculture && job.departureTime && <p><strong className="text-gray-900">Salida:</strong> {job.departureTime} {job.returnTime ? `· Regreso aproximado ${job.returnTime}` : ""}</p>}
+        {!isAgriculture && job.facilityType && <p><strong className="text-gray-900">Instalación:</strong> {job.facilityType}</p>}
+        {job.otherBenefits && <p><strong className="text-gray-900">Incluye:</strong> {job.otherBenefits}</p>}
       </div>
-    </LockedSection>
-  </div>
-);
+    </section>
+  </div>;
+};
 
 const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied: boolean; onApply: () => void }) => (
   <div className="space-y-6">
@@ -409,12 +486,23 @@ const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied:
       </div>
 
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-        {job.benefits?.transport && (
+        {(job.sector ?? "agriculture") === "agriculture" && job.transportMode === "employer_transport" && (
           <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 flex items-start gap-3">
             <ShieldCheck size={18} className="text-emerald-600" />
             <div>
               <p className="font-bold text-emerald-800">Transporte incluido</p>
-              <p className="text-xs text-emerald-700">{job.transportInfo || "Detalles a confirmar."}</p>
+              <p className="text-xs text-emerald-700">{job.pickupPoints || job.transportInfo || "Detalles a confirmar."}</p>
+              {job.departureTime && <p className="mt-1 text-xs text-emerald-700">Salida {job.departureTime}{job.returnTime ? ` · Regreso ${job.returnTime}` : ""}</p>}
+            </div>
+          </div>
+        )}
+        {job.sector === "security" && (
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 flex items-start gap-3">
+            <ShieldCheck size={18} className="text-blue-800" />
+            <div>
+              <p className="font-bold text-blue-950">Turno {job.shiftPattern || job.shiftType || "por confirmar"}</p>
+              <p className="text-xs text-blue-800">{job.requiresOs10 ? "Requiere OS10 vigente" : "OS10 no obligatorio"}</p>
+              {job.facilityType && <p className="mt-1 text-xs text-blue-800">{job.facilityType}</p>}
             </div>
           </div>
         )}
@@ -450,13 +538,22 @@ const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied:
   </div>
 );
 
-const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
+const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agriculture" }) => {
   const { path, navigate } = usePath();
+  const experience = SECTOR_EXPERIENCES[sector];
+  const go = useCallback((to: string) => navigate(`${to}${sectorQuery(sector)}`), [navigate, sector]);
   const { authUser, loading } = useAuthUser();
   const jobs = useJobs(authUser ? "private" : "public");
   const applications = useWorkerApplications(authUser?.uid);
+  const matches = useWorkerMatches(authUser?.uid);
   const [workerProfile, setWorkerProfile] = useState<WorkerProfile | null>(null);
   const [workerDocs, setWorkerDocs] = useState<WorkerDocument[]>([]);
+  const [matchContacts, setMatchContacts] = useState<Record<string, MatchContact>>({});
+  const [matchNotice, setMatchNotice] = useState<string | null>(null);
+  const [reviewScores, setReviewScores] = useState<Record<string, number>>({});
+  const [reviewStates, setReviewStates] = useState<Record<string, ReviewState>>({});
+  const [reviewErrors, setReviewErrors] = useState<Record<string, string>>({});
+  const [reviewBusy, setReviewBusy] = useState("");
 
   useEffect(() => {
     if (!authUser) {
@@ -483,20 +580,64 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
   }, [authUser]);
 
   useEffect(() => {
-    if (!authUser && path.startsWith("/worker")) {
-      navigate("/trabajos");
+    if (!authUser) {
+      setReviewStates({});
+      setReviewErrors({});
+      return;
     }
-  }, [authUser, navigate, path]);
+
+    const reviewableMatches = matches.filter((match) => ["hired", "closed"].includes(match.state || ""));
+    const reviewableIds = new Set(reviewableMatches.map((match) => match.id));
+    setReviewStates((current) => {
+      const next: Record<string, ReviewState> = {};
+      reviewableMatches.forEach((match) => {
+        next[match.id] = current[match.id] === "reviewed" ? "reviewed" : "loading";
+      });
+      return next;
+    });
+    setReviewErrors((current) => Object.fromEntries(
+      Object.entries(current).filter(([matchId]) => reviewableIds.has(matchId))
+    ));
+
+    if (reviewableMatches.length === 0) return;
+
+    const reviewsQuery = query(collection(db, "match_reviews"), where("authorUid", "==", authUser.uid));
+    return onSnapshot(reviewsQuery, (snapshot) => {
+      const reviewedIds = new Set(snapshot.docs
+        .map((review) => review.data())
+        .filter((review) => review.side === "worker_to_company")
+        .map((review) => String(review.matchId || "")));
+      setReviewStates(Object.fromEntries(reviewableMatches.map((match) => [
+        match.id,
+        reviewedIds.has(match.id) ? "reviewed" : "not-reviewed",
+      ])));
+      setReviewErrors({});
+    }, () => {
+      setReviewStates(Object.fromEntries(reviewableMatches.map((match) => [match.id, "error"])));
+      setReviewErrors(Object.fromEntries(reviewableMatches.map((match) => [
+        match.id,
+        "No pudimos comprobar si esta evaluacion ya fue enviada. Intenta recargar la pagina.",
+      ])));
+    });
+  }, [authUser, matches]);
+
+  useEffect(() => {
+    if (!authUser && path.startsWith("/worker")) {
+      go("/trabajos");
+    }
+  }, [authUser, go, path]);
 
   useEffect(() => {
     if (authUser && path.startsWith("/auth")) {
-      navigate("/worker");
+      go("/worker");
     }
-  }, [authUser, navigate, path]);
+  }, [authUser, go, path]);
 
   const visibleJobs = useMemo(
-    () => jobs.filter((job) => (job.jobStatus ?? "active") !== "closed"),
-    [jobs]
+    () => jobs.filter((job) => (
+      (job.jobStatus ?? "active") !== "closed" && (job.sector ?? "agriculture") === sector
+    )),
+    [jobs, sector]
   );
 
   const jobIdMatch = path.match(/^\/trabajos\/([^/]+)$/);
@@ -509,39 +650,56 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
   const handleApply = async () => {
     if (!authUser || !selectedJob) return;
 
-    const applicationId = `${selectedJob.companyId}_${selectedJob.id}`;
-    const applicationRef = doc(db, "workers", authUser.uid, "applications", applicationId);
-    const companyApplicationRef = doc(
-      db,
-      "companies",
-      selectedJob.companyId,
-      "jobs",
-      selectedJob.id,
-      "applications",
-      applicationId
-    );
-
-    const payload = {
-      jobId: selectedJob.id,
+    const applyToJob = httpsCallable(functions, "applyToJob");
+    await applyToJob({
       companyId: selectedJob.companyId,
-      jobTitle: selectedJob.title,
-      companyName: selectedJob.companyName ?? "",
-      workerId: authUser.uid,
-      appliedAt: serverTimestamp(),
-      createdAt: serverTimestamp(),
-      status: "postulado",
-    };
+      jobId: selectedJob.id,
+    });
+  };
 
-    await Promise.all([
-      setDoc(applicationRef, payload, { merge: true }),
-      setDoc(companyApplicationRef, payload, { merge: true }),
-    ]);
+  const handleMatchDecision = async (
+    matchId: string,
+    decision: "interested" | "declined"
+  ) => {
+    const respondToMatch = httpsCallable(functions, "respondToMatch");
+    await respondToMatch({matchId, decision});
+  };
+
+  const handleRevealContact = async (matchId: string) => {
+    setMatchNotice(null);
+    try {
+      const getMatchContact = httpsCallable(functions, "getMatchContact");
+      const result = await getMatchContact({matchId});
+      const data = result.data as {contact?: MatchContact};
+      setMatchContacts((current) => ({...current, [matchId]: data.contact || {}}));
+    } catch (error: any) {
+      setMatchNotice(error?.message || "No se pudo mostrar el contacto.");
+    }
+  };
+
+  const handleSubmitReview = async (matchId: string) => {
+    const overall = reviewScores[matchId];
+    if (!overall) {
+      setMatchNotice("Selecciona una calificación antes de enviar.");
+      return;
+    }
+    setMatchNotice(null);
+    setReviewBusy(matchId);
+    try {
+      const submitMatchReview = httpsCallable(functions, "submitMatchReview");
+      await submitMatchReview({matchId, overall});
+      setReviewStates((current) => ({...current, [matchId]: "reviewed"}));
+    } catch (error: any) {
+      setMatchNotice(error?.message || "No se pudo enviar la evaluación.");
+    } finally {
+      setReviewBusy("");
+    }
   };
 
   const handleLogout = async () => {
     await logoutWorker();
     if (onExit) onExit();
-    navigate("/trabajos");
+    go("/trabajos");
   };
 
   if (loading) {
@@ -554,16 +712,17 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
     const initialMode = path.startsWith("/auth/register") ? "register" : "login";
     return (
       <WorkerAuthScreen
-        onSuccess={() => navigate("/worker")}
-        onBack={() => navigate("/trabajos")}
+        onSuccess={() => go("/worker")}
+        onBack={() => go("/trabajos")}
         initialMode={initialMode}
+        sector={sector}
       />
     );
   }
 
   if (path === "/worker" && authUser) {
     return (
-      <WorkerLayout onNavigate={navigate} onLogout={handleLogout}>
+      <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
         <div className="grid gap-6">
           <div className="bg-white rounded-3xl border border-emerald-100 p-6 shadow-sm">
             <h2 className="text-xl font-extrabold text-gray-900">¡Hola, {workerProfile?.fullName || "Trabajador"}!</h2>
@@ -589,7 +748,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
           <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-extrabold text-gray-900">Últimas ofertas</h3>
-              <button onClick={() => navigate("/trabajos")} className="text-xs font-bold text-emerald-600">
+              <button onClick={() => go("/trabajos")} className="text-xs font-bold text-emerald-600">
                 Ver todas
               </button>
             </div>
@@ -599,7 +758,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
                   key={`${job.companyId}-${job.id}`}
                   job={job}
                   applied={applications.some((app) => app.jobId === job.id && app.companyId === job.companyId)}
-                  onSelect={() => navigate(`/trabajos/${job.id}`)}
+                  onSelect={() => go(`/trabajos/${job.id}`)}
                 />
               ))}
             </div>
@@ -611,12 +770,85 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
 
   if (path === "/worker/postulaciones" && authUser) {
     return (
-      <WorkerLayout onNavigate={navigate} onLogout={handleLogout}>
+      <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
         <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
           <h2 className="text-xl font-extrabold text-gray-900">Mis postulaciones</h2>
           <p className="text-sm text-gray-500 mt-2">Sigue el estado de tus postulaciones.</p>
           <div className="mt-6 grid gap-4">
-            {applications.length === 0 && (
+            {matches
+              .filter((match) => ["matched", "hired"].includes(String(match.state || "")))
+              .map((match) => {
+                const contact = matchContacts[match.id];
+                return (
+                  <div key={match.id} className="rounded-3xl border-2 border-emerald-300 bg-emerald-50 p-5">
+                    <div className="text-sm font-black uppercase tracking-wide text-emerald-800">¡Hay coincidencia!</div>
+                    <div className="mt-2 text-xl font-black text-gray-900">{match.jobTitle || "Oferta de trabajo"}</div>
+                    <div className="mt-1 text-base text-gray-700">{match.companyName || "Empresa"}</div>
+                    <p className="mt-3 text-sm leading-relaxed text-emerald-900">La empresa también está interesada. Ya pueden coordinar los siguientes pasos.</p>
+                    {!contact ? (
+                      <button onClick={() => handleRevealContact(match.id)} className="mt-4 min-h-12 w-full rounded-2xl bg-emerald-700 text-base font-black text-white">
+                        Ver datos de contacto
+                      </button>
+                    ) : (
+                      <div className="mt-4 rounded-2xl border border-emerald-200 bg-white p-4 text-base font-bold text-gray-800">
+                        {contact.phone && <a className="block text-emerald-800 underline" href={`https://wa.me/${contact.phone.replace(/[^0-9]/g, "")}`}>Escribir por WhatsApp: {contact.phone}</a>}
+                        {contact.email && <a className="mt-2 block text-emerald-800 underline" href={`mailto:${contact.email}`}>{contact.email}</a>}
+                        {!contact.phone && !contact.email && <span>La empresa aún no ha informado un contacto.</span>}
+                      </div>
+                    )}
+                    {match.state === "hired" && (
+                      <div className="mt-5 border-t border-emerald-200 pt-5">
+                        {!reviewStates[match.id] || reviewStates[match.id] === "loading" ? (
+                          <p role="status" aria-live="polite" className="font-bold text-gray-700">Comprobando evaluacion...</p>
+                        ) : reviewStates[match.id] === "error" ? (
+                          <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 font-bold text-red-800">{reviewErrors[match.id]}</p>
+                        ) : reviewStates[match.id] === "reviewed" ? (
+                          <p className="font-black text-emerald-800">Gracias por evaluar esta experiencia.</p>
+                        ) : (
+                          <>
+                            <p className="text-sm font-black text-gray-900">¿Cómo fue tu experiencia con la empresa?</p>
+                            <div className="mt-3 grid grid-cols-5 gap-2">
+                              {[1, 2, 3, 4, 5].map((score) => (
+                                <button key={score} disabled={reviewBusy === match.id} onClick={() => setReviewScores((current) => ({...current, [match.id]: score}))} className={`min-h-12 rounded-xl text-lg font-black disabled:opacity-50 ${reviewScores[match.id] === score ? "bg-amber-400 text-amber-950" : "border border-gray-200 bg-white text-gray-500"}`}>
+                                  {score}★
+                                </button>
+                              ))}
+                            </div>
+                            <button disabled={reviewBusy === match.id || !reviewScores[match.id]} aria-busy={reviewBusy === match.id} onClick={() => handleSubmitReview(match.id)} className="mt-3 min-h-12 w-full rounded-2xl bg-slate-900 text-sm font-black text-white disabled:opacity-50">{reviewBusy === match.id ? "Enviando evaluación..." : "Enviar evaluación"}</button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            {matches
+              .filter((match) => match.state === "company_interested")
+              .map((match) => (
+                <div key={match.id} className="border-2 border-emerald-200 bg-emerald-50 rounded-2xl p-4">
+                  <div className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                    Una empresa está interesada en ti
+                  </div>
+                  <div className="mt-2 font-extrabold text-gray-900">{match.jobTitle || "Oferta de trabajo"}</div>
+                  <div className="text-sm text-gray-600">{match.companyName || "Empresa"}</div>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => handleMatchDecision(match.id, "declined")}
+                      className="min-h-11 rounded-xl border border-gray-300 bg-white text-sm font-bold text-gray-700"
+                    >
+                      No me interesa
+                    </button>
+                    <button
+                      onClick={() => handleMatchDecision(match.id, "interested")}
+                      className="min-h-11 rounded-xl bg-emerald-600 text-sm font-bold text-white"
+                    >
+                      Me interesa
+                    </button>
+                  </div>
+                </div>
+              ))}
+            {matchNotice && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{matchNotice}</div>}
+            {applications.length === 0 && matches.length === 0 && (
               <div className="text-sm text-gray-400 text-center py-12 border border-dashed rounded-2xl">
                 Aún no tienes postulaciones registradas.
               </div>
@@ -642,29 +874,11 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
 
   if (path === "/worker/perfil" && authUser) {
     return (
-      <WorkerLayout onNavigate={navigate} onLogout={handleLogout}>
+      <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
         <div className="grid gap-6">
-          <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
-            <div className="flex items-center gap-4">
-              <div className="h-12 w-12 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-700">
-                <UserIcon size={24} />
-              </div>
-              <div>
-                <div className="text-lg font-extrabold text-gray-900">{workerProfile?.fullName || "Perfil"}</div>
-                <div className="text-xs text-gray-500">{workerProfile?.rut || "RUT por confirmar"}</div>
-              </div>
-            </div>
-            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm text-gray-600">
-              <div className="rounded-2xl border border-gray-100 p-4">
-                <div className="text-xs text-gray-400 font-bold uppercase">Teléfono</div>
-                <div className="mt-2 font-semibold text-gray-700">{workerProfile?.phone || "Sin teléfono"}</div>
-              </div>
-              <div className="rounded-2xl border border-gray-100 p-4">
-                <div className="text-xs text-gray-400 font-bold uppercase">UID</div>
-                <div className="mt-2 font-mono text-xs text-gray-500 break-all">{authUser.uid}</div>
-              </div>
-            </div>
-          </div>
+          <WorkerProfileEditor uid={authUser.uid} email={authUser.email || ""} profile={workerProfile} />
+
+          <WorkerCredentialsPanel uid={authUser.uid} />
 
           <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
             <h3 className="text-lg font-extrabold text-gray-900">Documentos laborales</h3>
@@ -696,11 +910,11 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
   if (path.startsWith("/trabajos")) {
     if (authUser) {
       return (
-        <WorkerLayout onNavigate={navigate} onLogout={handleLogout}>
+        <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
           <div className="space-y-6">
             <div>
-              <h2 className="text-2xl font-extrabold text-gray-900">Ofertas disponibles</h2>
-              <p className="text-sm text-gray-500 mt-2">Postula con un clic y da seguimiento desde tu perfil.</p>
+              <h2 className="text-2xl font-extrabold text-gray-900">{experience.jobsTitle}</h2>
+              <p className="text-sm text-gray-500 mt-2">{experience.jobsDescription}</p>
             </div>
             {jobIdMatch && selectedJob ? (
               <JobDetailPrivate job={selectedJob} applied={appliedToSelected} onApply={handleApply} />
@@ -711,7 +925,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
                     key={`${job.companyId}-${job.id}`}
                     job={job}
                     applied={applications.some((app) => app.jobId === job.id && app.companyId === job.companyId)}
-                    onSelect={() => navigate(`/trabajos/${job.id}`)}
+                    onSelect={() => go(`/trabajos/${job.id}`)}
                   />
                 ))}
               </div>
@@ -722,37 +936,41 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit }) => {
     }
 
     return (
-      <PublicLayout onAuthClick={() => navigate("/auth")}> 
+      <PublicLayout onAuthClick={() => go("/auth")} sector={sector}>
         <div className="space-y-6">
           <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
-            <h2 className="text-2xl font-extrabold text-gray-900">Trabajos agrícolas disponibles</h2>
-            <p className="text-sm text-gray-500 mt-2">
-              Explora ofertas reales y crea tu cuenta para postular.
-            </p>
+            <h2 className="text-2xl font-extrabold text-gray-900">{experience.jobsTitle}</h2>
+            <p className="text-sm text-gray-500 mt-2">{experience.jobsDescription}</p>
           </div>
           {jobIdMatch && selectedJob ? (
             <JobDetailPublic job={selectedJob} />
           ) : (
             <div className="grid gap-4">
               {visibleJobs.map((job) => (
-                <JobCardPublic key={`${job.companyId}-${job.id}`} job={job} onSelect={() => navigate(`/trabajos/${job.id}`)} />
+                <JobCardPublic key={`${job.companyId}-${job.id}`} job={job} onSelect={() => go(`/trabajos/${job.id}`)} />
               ))}
+              {visibleJobs.length === 0 && (
+                <div className="rounded-3xl border border-dashed border-gray-300 bg-white p-10 text-center">
+                  <h3 className="text-lg font-extrabold text-gray-900">Próximamente habrá oportunidades en esta sección</h3>
+                  <p className="mt-2 text-base text-gray-500">Estamos incorporando empresas y ofertas verificadas de tu zona.</p>
+                </div>
+              )}
             </div>
           )}
         </div>
-        <RegisterCTASticky onClick={() => navigate("/auth/register")} />
+        <RegisterCTASticky onClick={() => go("/auth/register")} />
       </PublicLayout>
     );
   }
 
   return (
-    <PublicLayout onAuthClick={() => navigate("/auth")}> 
+    <PublicLayout onAuthClick={() => go("/auth")} sector={sector}>
       <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm text-center">
         <Briefcase size={32} className="text-emerald-600 mx-auto" />
         <h2 className="text-xl font-extrabold text-gray-900 mt-4">Portal Trabajador</h2>
         <p className="text-sm text-gray-500 mt-2">Accede a las ofertas en /trabajos para comenzar.</p>
         <button
-          onClick={() => navigate("/trabajos")}
+          onClick={() => go("/trabajos")}
           className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-600 text-white text-xs font-black uppercase tracking-widest"
         >
           Ver trabajos

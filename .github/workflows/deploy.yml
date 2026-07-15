@@ -1,33 +1,81 @@
-name: Deploy to Firebase Hosting
+﻿name: Deploy to Firebase Hosting
 
 on:
   push:
     branches:
-      - main  # O la rama que uses como principal
+      - main
+      - 'release/*'
 
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    concurrency:
+      group: hosting-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
+      - name: Resolve target project
+        id: target
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "project_id=${{ secrets.FIREBASE_PROJECT_ID_PROD }}" >> "$GITHUB_OUTPUT"
+            echo "channel=live" >> "$GITHUB_OUTPUT"
+          else
+            echo "project_id=${{ secrets.FIREBASE_PROJECT_ID_STAGING }}" >> "$GITHUB_OUTPUT"
+            echo "channel=live" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Validate source
+        run: |
+          npm run lint
+          npm run test:rules
+
+      - name: Validate target secrets
+        shell: bash
+        run: |
+          if [[ -z "${{ steps.target.outputs.project_id }}" ]]; then
+            echo "Missing Firebase project ID secret for this branch." >&2
+            exit 1
+          fi
+          for value in \
+            '${{ secrets.VITE_FIREBASE_API_KEY }}' \
+            '${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}' \
+            '${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}' \
+            '${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}' \
+            '${{ secrets.VITE_FIREBASE_APP_ID }}'; do
+            if [[ -z "$value" ]]; then
+              echo "Missing Firebase web configuration for this environment." >&2
+              exit 1
+            fi
+          done
 
       - name: Build
         run: npm run build
         env:
-          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ steps.target.outputs.project_id }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
 
-      - name: Deploy to Firebase
+      - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: '${{ secrets.GITHUB_TOKEN }}'
           firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_AGROCONNECT_APP_420 }}'
-          channelId: live
-          projectId: agroconnect-app-420
+          channelId: '${{ steps.target.outputs.channel }}'
+          projectId: '${{ steps.target.outputs.project_id }}'

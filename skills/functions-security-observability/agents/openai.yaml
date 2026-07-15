@@ -1,0 +1,3 @@
+﻿interface:
+  display_name: "Functions SecOps"
+  short_description: "Asegura y monitorea Cloud Functions"

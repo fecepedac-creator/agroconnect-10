@@ -34,7 +34,10 @@ interface JobsProps {
   currentCompany: Company | null;
 }
 
-const CATEGORIES = ['Cosecha', 'Packing', 'Poda', 'Maquinaria', 'Otros'];
+const CATEGORIES_BY_SECTOR = {
+  agriculture: ['Cosecha', 'Packing', 'Poda', 'Maquinaria', 'Otros'],
+  security: ['Guardia de seguridad', 'Control de acceso', 'Rondín', 'Supervisor', 'Otros'],
+};
 const PAYMENT_TYPES = ['Al Día', 'Semanal', 'Quincenal', 'Por Kilo'];
 
 const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
@@ -51,10 +54,20 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
     workersNeeded: 10,
     startDate: new Date().toISOString().split('T')[0],
     location: '',
+    sector: 'agriculture',
     category: 'Cosecha',
     paymentType: 'Al Día',
     benefits: { transport: false, lunch: false },
+    transportMode: 'pending',
     transportInfo: '',
+    pickupPoints: '',
+    departureTime: '',
+    returnTime: '',
+    transportCost: 0,
+    shiftType: 'day',
+    shiftPattern: '4x4',
+    requiresOs10: true,
+    facilityType: '',
     otherBenefits: '',
     publishPublic: false,
     lat: -34.985, 
@@ -90,10 +103,20 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
             isActive: data.isActive ?? false,
             jobStatus: data.jobStatus ?? (data.isActive ? 'active' : 'future'),
             qrCodeUrl: data.qrCodeUrl ?? '',
+            sector: data.sector ?? 'agriculture',
             category: data.category ?? 'Otros',
             paymentType: data.paymentType ?? 'Al Día',
             benefits: data.benefits ?? { transport: false, lunch: false },
+            transportMode: data.transportMode ?? 'pending',
             transportInfo: data.transportInfo ?? '',
+            pickupPoints: data.pickupPoints ?? '',
+            departureTime: data.departureTime ?? '',
+            returnTime: data.returnTime ?? '',
+            transportCost: data.transportCost ?? 0,
+            shiftType: data.shiftType ?? 'day',
+            shiftPattern: data.shiftPattern ?? '',
+            requiresOs10: data.requiresOs10 ?? false,
+            facilityType: data.facilityType ?? '',
             otherBenefits: data.otherBenefits ?? '',
           } as JobOffer;
         });
@@ -215,10 +238,20 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
         isActive: false,
         jobStatus: 'future',
         qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=AgroConnect-${Date.now()}`,
+        sector: newJob.sector ?? 'agriculture',
         category: newJob.category as any,
         paymentType: newJob.paymentType as any,
         benefits: newJob.benefits,
+        transportMode: newJob.transportMode,
         transportInfo: newJob.transportInfo,
+        pickupPoints: newJob.pickupPoints,
+        departureTime: newJob.departureTime,
+        returnTime: newJob.returnTime,
+        transportCost: Number(newJob.transportCost || 0),
+        shiftType: newJob.shiftType,
+        shiftPattern: newJob.shiftPattern,
+        requiresOs10: Boolean(newJob.requiresOs10),
+        facilityType: newJob.facilityType,
         otherBenefits: newJob.otherBenefits,
         publishPublic: Boolean(newJob.publishPublic),
         createdAt: serverTimestamp(),
@@ -235,10 +268,20 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
         workersNeeded: 10,
         startDate: new Date().toISOString().split('T')[0],
         location: '',
+        sector: 'agriculture',
         category: 'Cosecha',
         paymentType: 'Al Día',
         benefits: { transport: false, lunch: false },
+        transportMode: 'pending',
         transportInfo: '',
+        pickupPoints: '',
+        departureTime: '',
+        returnTime: '',
+        transportCost: 0,
+        shiftType: 'day',
+        shiftPattern: '4x4',
+        requiresOs10: true,
+        facilityType: '',
         otherBenefits: '',
         publishPublic: false,
         lat: -34.985,
@@ -310,8 +353,27 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
               <h3 className="font-black text-gray-800 flex items-center gap-2 uppercase tracking-tighter italic"><Briefcase size={22} className="text-emerald-500"/> Configuración de la Oferta</h3>
               
               <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Rubro de la oferta</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setNewJob({...newJob, sector: 'agriculture', category: 'Cosecha'})}
+                      className={`min-h-12 rounded-xl border-2 text-sm font-black transition ${newJob.sector !== 'security' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-gray-100 bg-white text-gray-500'}`}
+                    >
+                      Agricultura
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewJob({...newJob, sector: 'security', category: 'Guardia de seguridad'})}
+                      className={`min-h-12 rounded-xl border-2 text-sm font-black transition ${newJob.sector === 'security' ? 'border-blue-900 bg-blue-50 text-blue-950' : 'border-gray-100 bg-white text-gray-500'}`}
+                    >
+                      Seguridad
+                    </button>
+                  </div>
+                </div>
                 <div className="col-span-2"><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Título del Puesto</label><input type="text" className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none" value={newJob.title} onChange={e => setNewJob({...newJob, title: e.target.value})} placeholder="Ej: Cosechero de Manzanas" /></div>
-                <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Categoría</label><select className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm bg-white font-bold" value={newJob.category} onChange={e => setNewJob({...newJob, category: e.target.value as any})}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Categoría</label><select className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm bg-white font-bold" value={newJob.category} onChange={e => setNewJob({...newJob, category: e.target.value as any})}>{CATEGORIES_BY_SECTOR[newJob.sector === 'security' ? 'security' : 'agriculture'].map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                 <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Tipo de Pago</label><select className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm bg-white font-bold" value={newJob.paymentType} onChange={e => setNewJob({...newJob, paymentType: e.target.value as any})}>{PAYMENT_TYPES.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
                 <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Fecha de Inicio</label><input type="date" className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm font-bold" value={newJob.startDate} onChange={e => setNewJob({...newJob, startDate: e.target.value})} /></div>
                 <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Nombre Ubicación</label><input type="text" className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm font-bold" value={newJob.location} onChange={e => setNewJob({...newJob, location: e.target.value})} placeholder="Ej: Fundo El Olivar" /></div>
@@ -341,15 +403,48 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
                 </div>
               </div>
 
-              <h3 className="font-black text-gray-800 flex items-center gap-2 pt-4 uppercase tracking-tighter italic"><ThumbsUp size={22} className="text-emerald-500"/> Beneficios y Kit</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className={`p-4 rounded-xl border-2 transition-all ${newJob.benefits?.transport ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-100'}`}>
-                  <div className="flex justify-between items-center mb-3">
-                    <span className="flex items-center gap-2 font-bold text-sm"><Bus size={20} className={newJob.benefits?.transport ? 'text-blue-600' : 'text-gray-300'}/> Bus de Acercamiento</span>
-                    <input type="checkbox" checked={newJob.benefits?.transport} onChange={e => setNewJob({...newJob, benefits: {...newJob.benefits, transport: e.target.checked}})} className="w-5 h-5 accent-blue-600 cursor-pointer" />
-                  </div>
-                  {newJob.benefits?.transport && <input type="text" className="w-full bg-white border border-blue-100 rounded-lg p-2 text-xs font-bold outline-none" placeholder="Ej: Plaza de Curicó 06:00 AM" value={newJob.transportInfo} onChange={e => setNewJob({...newJob, transportInfo: e.target.value})} />}
+              {newJob.sector !== 'security' ? (
+                <div className="rounded-3xl border-2 border-emerald-100 bg-emerald-50 p-5 space-y-4">
+                  <h3 className="flex items-center gap-2 text-lg font-black text-emerald-950"><Bus size={22}/> Transporte de la faena</h3>
+                  <label className="block text-sm font-black text-emerald-900">
+                    ¿Cómo llegarán los trabajadores?
+                    <select
+                      value={newJob.transportMode}
+                      onChange={(e) => {
+                        const transportMode = e.target.value as JobOffer['transportMode'];
+                        setNewJob({...newJob, transportMode, benefits: {...newJob.benefits, transport: transportMode === 'employer_transport'}});
+                      }}
+                      className="mt-2 min-h-12 w-full rounded-xl border border-emerald-200 bg-white px-3 text-sm font-bold"
+                    >
+                      <option value="pending">Por confirmar</option>
+                      <option value="employer_transport">Empresa o contratista proporciona transporte</option>
+                      <option value="transport_allowance">Se entrega asignación de movilización</option>
+                      <option value="worker_own">Cada trabajador llega por sus medios</option>
+                    </select>
+                  </label>
+                  {newJob.transportMode === 'employer_transport' && (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <input value={newJob.pickupPoints} onChange={(e) => setNewJob({...newJob, pickupPoints: e.target.value, transportInfo: e.target.value})} className="min-h-12 rounded-xl border border-emerald-200 px-3 text-sm font-bold md:col-span-2" placeholder="Puntos de encuentro o recorrido" />
+                      <label className="text-xs font-black text-emerald-900">Salida<input type="time" value={newJob.departureTime} onChange={(e) => setNewJob({...newJob, departureTime: e.target.value})} className="mt-1 min-h-12 w-full rounded-xl border border-emerald-200 px-3 text-sm" /></label>
+                      <label className="text-xs font-black text-emerald-900">Regreso aproximado<input type="time" value={newJob.returnTime} onChange={(e) => setNewJob({...newJob, returnTime: e.target.value})} className="mt-1 min-h-12 w-full rounded-xl border border-emerald-200 px-3 text-sm" /></label>
+                      <label className="text-xs font-black text-emerald-900 md:col-span-2">Costo para el trabajador<input type="number" min="0" value={newJob.transportCost} onChange={(e) => setNewJob({...newJob, transportCost: Number(e.target.value)})} className="mt-1 min-h-12 w-full rounded-xl border border-emerald-200 px-3 text-sm" /></label>
+                    </div>
+                  )}
                 </div>
+              ) : (
+                <div className="rounded-3xl border-2 border-blue-100 bg-blue-50 p-5 space-y-4">
+                  <h3 className="flex items-center gap-2 text-lg font-black text-blue-950"><ShieldCheck size={22}/> Condiciones de seguridad</h3>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="text-xs font-black text-blue-950">Tipo de turno<select value={newJob.shiftType} onChange={(e) => setNewJob({...newJob, shiftType: e.target.value as JobOffer['shiftType']})} className="mt-1 min-h-12 w-full rounded-xl border border-blue-200 bg-white px-3 text-sm"><option value="day">Día</option><option value="night">Noche</option><option value="rotating">Rotativo</option></select></label>
+                    <label className="text-xs font-black text-blue-950">Modalidad<input value={newJob.shiftPattern} onChange={(e) => setNewJob({...newJob, shiftPattern: e.target.value})} className="mt-1 min-h-12 w-full rounded-xl border border-blue-200 px-3 text-sm" placeholder="Ej: 4x4" /></label>
+                    <label className="text-xs font-black text-blue-950 md:col-span-2">Tipo de instalación<input value={newJob.facilityType} onChange={(e) => setNewJob({...newJob, facilityType: e.target.value})} className="mt-1 min-h-12 w-full rounded-xl border border-blue-200 px-3 text-sm" placeholder="Ej: condominio, bodega o planta" /></label>
+                    <label className="flex min-h-12 items-center gap-3 rounded-xl bg-white px-3 text-sm font-black text-blue-950 md:col-span-2"><input type="checkbox" checked={Boolean(newJob.requiresOs10)} onChange={(e) => setNewJob({...newJob, requiresOs10: e.target.checked})} className="h-5 w-5 accent-blue-900"/> Requiere OS10 vigente</label>
+                  </div>
+                </div>
+              )}
+
+              <h3 className="font-black text-gray-800 flex items-center gap-2 pt-4 uppercase tracking-tighter italic"><ThumbsUp size={22} className="text-emerald-500"/> Beneficios e implementos</h3>
+              <div className="grid grid-cols-1 gap-4">
                 <div className={`p-4 rounded-xl border-2 transition-all flex justify-between items-center ${newJob.benefits?.lunch ? 'bg-orange-50 border-orange-200' : 'bg-white border-gray-100'}`}>
                    <span className="flex items-center gap-2 font-bold text-sm"><Utensils size={20} className={newJob.benefits?.lunch ? 'text-orange-600' : 'text-gray-300'}/> Almuerzo Incluido</span>
                    <input type="checkbox" checked={newJob.benefits?.lunch} onChange={e => setNewJob({...newJob, benefits: {...newJob.benefits, lunch: e.target.checked}})} className="w-5 h-5 accent-orange-600 cursor-pointer" />
@@ -357,8 +452,8 @@ const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
               </div>
 
               <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 space-y-2">
-                <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-2"><ShieldCheck size={16}/> Kit de Trabajo (Bloqueador, Guantes, etc.)</label>
-                <input type="text" className="w-full bg-white border-2 border-emerald-100 rounded-xl p-3 text-sm font-bold outline-none" placeholder="Ej: Gorro, bloqueador y guantes incluidos." value={newJob.otherBenefits} onChange={e => setNewJob({...newJob, otherBenefits: e.target.value})} />
+                <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-2"><ShieldCheck size={16}/> {newJob.sector === 'security' ? 'Uniforme e implementos' : 'Kit de trabajo'}</label>
+                <input type="text" className="w-full bg-white border-2 border-emerald-100 rounded-xl p-3 text-sm font-bold outline-none" placeholder={newJob.sector === 'security' ? 'Ej: uniforme y radio incluidos.' : 'Ej: gorro, bloqueador y guantes incluidos.'} value={newJob.otherBenefits} onChange={e => setNewJob({...newJob, otherBenefits: e.target.value})} />
               </div>
 
               <div className="bg-white p-4 rounded-2xl border border-gray-200 space-y-2">

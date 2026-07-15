@@ -1,0 +1,3 @@
+﻿interface:
+  display_name: "Product Ops Metrics"
+  short_description: "Define KPI accionables de producto"

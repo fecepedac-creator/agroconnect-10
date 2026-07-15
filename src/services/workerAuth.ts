@@ -12,10 +12,14 @@ import { normalizeRut } from "../utils/rut";
 
 export type WorkerRegisterInput = {
   fullName: string;
-  rut: string;
+  rut?: string;
   phone?: string;
   email: string;
   password: string;
+  commune: string;
+  primaryTrade: string;
+  sectors: Array<"agriculture" | "security">;
+  mobility: "needs_transport" | "public_transport" | "own_transport";
 };
 
 type WorkerProfile = {
@@ -25,6 +29,13 @@ type WorkerProfile = {
   rut?: string;
   email: string;
   phone?: string;
+  commune?: string;
+  primaryTrade?: string;
+  sectors?: Array<"agriculture" | "security">;
+  mobility?: "needs_transport" | "public_transport" | "own_transport";
+  available?: boolean;
+  os10Status?: "none" | "in_process" | "valid" | "expired";
+  preferredShift?: "day" | "night" | "rotating" | "any";
   role: "worker";
   authProviders: string[];
   createdAt?: any;
@@ -43,6 +54,10 @@ const buildWorkerProfile = (payload: {
   phone?: string;
   rut?: string;
   providers: string[];
+  commune?: string;
+  primaryTrade?: string;
+  sectors?: Array<"agriculture" | "security">;
+  mobility?: "needs_transport" | "public_transport" | "own_transport";
 }): WorkerProfile => ({
   uid: payload.uid,
   displayName: payload.fullName,
@@ -50,6 +65,10 @@ const buildWorkerProfile = (payload: {
   rut: payload.rut,
   email: payload.email,
   phone: payload.phone,
+  commune: payload.commune,
+  primaryTrade: payload.primaryTrade,
+  sectors: payload.sectors,
+  mobility: payload.mobility,
   role: "worker",
   authProviders: payload.providers,
   createdAt: serverTimestamp(),
@@ -71,7 +90,7 @@ const upsertWorkerUsername = async (rut: string, payload: { uid: string; email: 
 };
 
 export async function registerWorker(input: WorkerRegisterInput) {
-  const rutNorm = normalizeRut(input.rut);
+  const rutNorm = input.rut ? normalizeRut(input.rut) : undefined;
   const email = input.email.trim().toLowerCase();
   const fullName = input.fullName.trim();
 
@@ -85,59 +104,41 @@ export async function registerWorker(input: WorkerRegisterInput) {
     phone: input.phone?.trim() || undefined,
     rut: rutNorm,
     providers: ["password"],
+    commune: input.commune.trim(),
+    primaryTrade: input.primaryTrade.trim(),
+    sectors: input.sectors,
+    mobility: input.mobility,
   });
 
   await upsertWorkerDocs(uid, profile);
-  await upsertWorkerUsername(rutNorm, { uid, email });
+  if (rutNorm) {
+    await upsertWorkerUsername(rutNorm, { uid, email });
+  }
 
   return cred.user;
 }
 
 export async function loginWorker(identifier: string, password: string) {
-  const raw = identifier.trim();
-  let email = "";
-
-  if (raw.includes("@")) {
-    email = raw.toLowerCase();
-  } else {
-    const rutNorm = normalizeRut(raw);
-    const lookup = await getDoc(doc(db, WORKER_USERNAMES_COLLECTION, rutNorm));
-    if (!lookup.exists()) {
-      throw Object.assign(new Error("RUT no registrado."), { code: "worker/rut-not-found" });
-    }
-    email = String(lookup.data()?.email || "").toLowerCase();
-    if (!email) {
-      throw Object.assign(new Error("No se pudo resolver el email asociado a este RUT."), { code: "worker/rut-email-missing" });
-    }
+  const email = identifier.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("Ingresa un correo válido.");
   }
-
   const cred = await signInWithEmailAndPassword(auth, email, password);
   const uid = cred.user.uid;
   await upsertWorkerDocs(uid, { lastSeen: serverTimestamp(), updatedAt: serverTimestamp() });
   return cred.user;
 }
 
+
 export async function sendWorkerPasswordReset(identifier: string) {
-  const raw = identifier.trim();
-  let email = "";
-
-  if (raw.includes("@")) {
-    email = raw.toLowerCase();
-  } else {
-    const rutNorm = normalizeRut(raw);
-    const lookup = await getDoc(doc(db, WORKER_USERNAMES_COLLECTION, rutNorm));
-    if (!lookup.exists()) {
-      throw Object.assign(new Error("RUT no registrado."), { code: "worker/rut-not-found" });
-    }
-    email = String(lookup.data()?.email || "").toLowerCase();
-    if (!email) {
-      throw Object.assign(new Error("No se pudo resolver el email asociado a este RUT."), { code: "worker/rut-email-missing" });
-    }
+  const email = identifier.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("Ingresa un correo válido.");
   }
-
   await sendPasswordResetEmail(auth, email);
   return email;
 }
+
 
 export async function signInWorkerWithGoogle() {
   const provider = new GoogleAuthProvider();
@@ -173,8 +174,35 @@ export async function signInWorkerWithGoogle() {
 
   await upsertWorkerDocs(uid, profileUpdate);
 
-  const needsRut = !(snap.data()?.rut && String(snap.data()?.rut).length > 0);
-  return { user, needsRut };
+  return { user };
+}
+
+export type WorkerProfileUpdateInput = {
+  fullName: string;
+  phone?: string;
+  commune: string;
+  primaryTrade: string;
+  sectors: Array<"agriculture" | "security">;
+  mobility: "needs_transport" | "public_transport" | "own_transport";
+  available: boolean;
+  os10Status: "none" | "in_process" | "valid" | "expired";
+  preferredShift: "day" | "night" | "rotating" | "any";
+};
+
+export async function updateWorkerProfile(uid: string, input: WorkerProfileUpdateInput) {
+  await upsertWorkerDocs(uid, {
+    displayName: input.fullName.trim(),
+    fullName: input.fullName.trim(),
+    phone: input.phone?.trim() || undefined,
+    commune: input.commune.trim(),
+    primaryTrade: input.primaryTrade.trim(),
+    sectors: input.sectors,
+    mobility: input.mobility,
+    available: input.available,
+    os10Status: input.os10Status,
+    preferredShift: input.preferredShift,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function updateWorkerRut(uid: string, rut: string, email: string) {

@@ -1,6 +1,9 @@
-{
+﻿{
   "projects": {
-    "default": "agroconnect-10-14242150-423d4"
+    "default": "agroconnect-10-14242150-423d4",
+    "dev": "agroconnect-10-14242150-423d4",
+    "staging": "REPLACE_WITH_STAGING_PROJECT_ID",
+    "prod": "REPLACE_WITH_PROD_PROJECT_ID"
   },
   "targets": {},
   "etags": {}

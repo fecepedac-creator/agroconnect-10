@@ -4,8 +4,22 @@ import {
   onDocumentUpdated,
 } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
-import { defineSecret } from "firebase-functions/params";
+import { defineSecret, defineString } from "firebase-functions/params";
 import nodemailer from "nodemailer";
+import {isVerifiedGoogleIdentity} from "./authPolicy";
+import {
+  canRespondToMatchState,
+  isSelfDeclaredCredentialType,
+  isTerminalMatchState,
+  nextMatchState,
+  parseCredentialDecision,
+  parseMatchDecision,
+} from "./matchPolicy";
+import {
+  canBootstrapLegacyMembership,
+  canManageCompanyMembership,
+  isActiveCompanyMembership,
+} from "./accessPolicy";
 
 import * as admin from "firebase-admin";
 
@@ -20,7 +34,9 @@ const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 const GMAIL_USER = "agroconnect@gmail.com";
 const GMAIL_REPLY_TO = "fecepedac@gmail.com";
 const DEFAULT_FROM_NAME = "AgroConnect";
-const SUPERADMIN_EMAILS = ["fecepedac@gmail.com"];
+const SUPERADMIN_EMAILS_PARAM = defineString("SUPERADMIN_EMAILS", {
+  default: "",
+});
 
 function isSuperAdminToken(token: any): boolean {
   const role = String(token?.role || "").toLowerCase();
@@ -30,6 +46,11 @@ function isSuperAdminToken(token: any): boolean {
     role === "admin" ||
     role === "superadmin"
   );
+}
+
+async function hasCurrentSuperadminClaims(uid: string): Promise<boolean> {
+  const currentUser = await admin.auth().getUser(uid);
+  return isSuperAdminToken(currentUser.customClaims || {});
 }
 
 async function assertAuthenticated(request: any) {
@@ -50,15 +71,18 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-async function getUserRole(uid: string): Promise<string> {
-  try {
-    const snap = await db.collection("users").doc(uid).get();
-    return String(snap.data()?.role || "none");
-  } catch (e) {
-    console.error("getUserRole error:", e);
-    return "none";
-  }
+function getSuperadminEmails(): string[] {
+  const raw = String(SUPERADMIN_EMAILS_PARAM.value() || "").trim();
+  if (!raw) return [];
+
+  const parsed = raw
+    .split(",")
+    .map((email) => normalizeEmail(email))
+    .filter((email) => isValidEmail(email));
+
+  return parsed;
 }
+
 
 async function callGeminiText(apiKey: string, prompt: string, temperature = 0.3): Promise<string> {
   const response = await fetch(
@@ -124,43 +148,1075 @@ export const syncUserAccess = onCall(async (request) => {
   }
 
   const email = String(user.token.email).toLowerCase();
-
-  // Buscar empresa donde adminEmail coincide
-  const snap = await db
-    .collection("companies")
-    .where("adminEmail", "==", email)
-    .limit(1)
-    .get();
-
-  let role: "company_admin" | "worker" | "none" = "worker";
-  let companyId: string | null = null;
-
-  if (!snap.empty) {
-    role = "company_admin";
-    companyId = snap.docs[0].id;
-  } else {
-    role = "worker";
-    companyId = null;
-  }
+  const trustedCompanyIdentity = isVerifiedGoogleIdentity(user.token);
 
   const userRef = db.collection("users").doc(user.uid);
+  const existing = await userRef.get();
+  const preferredCompanyId = String(existing.data()?.activeCompanyId || "");
+
+  let role: "company_admin" | "company_hr" | "worker" | "none" = "worker";
+  let companyId: string | null = null;
+
+  if (trustedCompanyIdentity) {
+    const memberships = await db
+      .collectionGroup("company_members")
+      .where("uid", "==", user.uid)
+      .limit(20)
+      .get();
+    const activeMemberships = memberships.docs.filter(
+      (doc) => doc.data()?.status === "active"
+    );
+    const selectedMembership =
+      activeMemberships.find(
+        (doc) => doc.ref.parent.parent?.id === preferredCompanyId
+      ) || activeMemberships[0];
+
+    if (selectedMembership) {
+      companyId = selectedMembership.ref.parent.parent?.id || null;
+      role = selectedMembership.data()?.role === "company_hr"
+        ? "company_hr"
+        : "company_admin";
+    } else {
+      // Compatibility bootstrap: convert the legacy adminEmail assignment into
+      // an explicit membership the first time the verified admin signs in.
+      const companySnap = await db
+        .collection("companies")
+        .where("adminEmail", "==", email)
+        .limit(1)
+        .get();
+      if (!companySnap.empty) {
+        companyId = companySnap.docs[0].id;
+        const legacyMemberRef = companySnap.docs[0].ref
+          .collection("company_members")
+          .doc(user.uid);
+        const legacyMember = await legacyMemberRef.get();
+        // Never reactivate a membership that an administrator explicitly
+        // suspended or removed.
+        if (canBootstrapLegacyMembership(legacyMember.exists ? legacyMember.data() : null)) {
+          role = "company_admin";
+          await legacyMemberRef.set({
+            uid: user.uid,
+            companyId,
+            email,
+            role,
+            status: "active",
+            createdByUid: "legacy_admin_email_bootstrap",
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+            activatedAt: FieldValue.serverTimestamp(),
+            schemaVersion: 1,
+          }, {merge: true});
+        } else {
+          companyId = null;
+        }
+      }
+    }
+  }
 
   const payload: any = {
     role,
     companyId,
+    activeCompanyId: companyId,
     email,
     updatedAt: FieldValue.serverTimestamp(),
   };
 
-  const existing = await userRef.get();
   if (!existing.exists) {
     payload.createdAt = FieldValue.serverTimestamp();
   }
 
   await userRef.set(payload, { merge: true });
 
-  return { ok: true, role, companyId };
+  // Keep Auth claims aligned with Firestore role/companyId.
+  // Do not degrade superadmin/admin privileges in this flow.
+  let claimsUpdated = false;
+  const auth = admin.auth();
+  const current = await auth.getUser(user.uid);
+  const existingClaims = current.customClaims || {};
+  const existingRole = String(existingClaims.role || "").toLowerCase();
+  const userHasElevatedClaims =
+    existingClaims.admin === true ||
+    existingClaims.superadmin === true ||
+    existingRole === "admin" ||
+    existingRole === "superadmin";
+
+  if (!userHasElevatedClaims) {
+    const nextClaims: Record<string, any> = {
+      ...existingClaims,
+      role,
+      companyId,
+    };
+
+    await auth.setCustomUserClaims(user.uid, nextClaims);
+    claimsUpdated = true;
+  }
+
+  return { ok: true, role, companyId, claimsUpdated };
 });
+
+export const setCompanyMember = onCall(async (request) => {
+  const caller = await assertAuthenticated(request);
+  if (!isVerifiedGoogleIdentity(caller.token)) {
+    throw new HttpsError(
+      "permission-denied",
+      "La gestión de miembros requiere una cuenta Google verificada."
+    );
+  }
+
+  const companyId = String(request.data?.companyId || "").trim();
+  const targetEmail = normalizeEmail(request.data?.email);
+  const role = request.data?.role === "company_hr"
+    ? "company_hr"
+    : "company_admin";
+  const requestedStatus = String(request.data?.status || "active");
+  if (
+    !companyId ||
+    !isValidEmail(targetEmail) ||
+    !["active", "suspended", "removed"].includes(requestedStatus)
+  ) {
+    throw new HttpsError("invalid-argument", "Datos de membresía inválidos.");
+  }
+
+  const callerMembership = await db
+    .collection("companies")
+    .doc(companyId)
+    .collection("company_members")
+    .doc(caller.uid)
+    .get();
+  const canManage =
+    await hasCurrentSuperadminClaims(caller.uid) ||
+    (
+      callerMembership.exists &&
+      canManageCompanyMembership(callerMembership.data())
+    );
+  if (!canManage) {
+    throw new HttpsError("permission-denied", "No puedes gestionar esta empresa.");
+  }
+
+  let targetUser;
+  try {
+    targetUser = await admin.auth().getUserByEmail(targetEmail);
+  } catch (_error) {
+    throw new HttpsError(
+      "failed-precondition",
+      "El usuario debe ingresar con Google antes de ser agregado."
+    );
+  }
+  if (
+    requestedStatus === "active" &&
+    (!targetUser.emailVerified ||
+      !targetUser.providerData.some((provider) => provider.providerId === "google.com"))
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "El miembro debe tener una cuenta Google verificada."
+    );
+  }
+
+  const memberRef = db
+    .collection("companies")
+    .doc(companyId)
+    .collection("company_members")
+    .doc(targetUser.uid);
+  const previous = await memberRef.get();
+  await memberRef.set({
+    uid: targetUser.uid,
+    companyId,
+    email: targetEmail,
+    role,
+    status: requestedStatus,
+    createdByUid: previous.data()?.createdByUid || caller.uid,
+    createdAt: previous.data()?.createdAt || FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    activatedAt: requestedStatus === "active"
+      ? FieldValue.serverTimestamp()
+      : previous.data()?.activatedAt || null,
+    suspendedAt: requestedStatus === "suspended"
+      ? FieldValue.serverTimestamp()
+      : null,
+    removedAt: requestedStatus === "removed"
+      ? FieldValue.serverTimestamp()
+      : null,
+    schemaVersion: 1,
+  }, {merge: true});
+
+  if (requestedStatus !== "active") {
+    const targetUserRef = db.collection("users").doc(targetUser.uid);
+    const targetUserData = (await targetUserRef.get()).data() || {};
+    if (targetUserData.companyId === companyId || targetUserData.activeCompanyId === companyId) {
+      await targetUserRef.set({
+        role: "worker",
+        companyId: null,
+        activeCompanyId: null,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+    }
+    const currentClaims = targetUser.customClaims || {};
+    const currentRole = String(currentClaims.role || "");
+    if (!["admin", "superadmin"].includes(currentRole)) {
+      const nextClaims = {...currentClaims};
+      delete nextClaims.companyId;
+      nextClaims.role = "worker";
+      await admin.auth().setCustomUserClaims(targetUser.uid, nextClaims);
+    }
+    await admin.auth().revokeRefreshTokens(targetUser.uid);
+  }
+  await db.collection("admin_audit").add({
+    action: "set_company_member",
+    companyId,
+    targetUid: targetUser.uid,
+    targetEmail,
+    role,
+    status: requestedStatus,
+    performedByUid: caller.uid,
+    performedAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    uid: targetUser.uid,
+    companyId,
+    role,
+    status: requestedStatus,
+  };
+});
+
+export const recordBillingEntry = onCall(async (request) => {
+  const caller = await assertAuthenticated(request);
+  if (
+    !isVerifiedGoogleIdentity(caller.token) ||
+    !await hasCurrentSuperadminClaims(caller.uid)
+  ) {
+    throw new HttpsError(
+      "permission-denied",
+      "La facturación requiere un SuperAdmin con Google verificado."
+    );
+  }
+
+  const companyId = String(request.data?.companyId || "").trim();
+  const type = request.data?.type === "payment" ? "payment" : "invoice";
+  const amount = Number(request.data?.amount);
+  const issuedAt = String(request.data?.issuedAt || "").trim();
+  const dueAt = String(request.data?.dueAt || "").trim();
+  const paidAt = String(request.data?.paidAt || "").trim();
+  const reference = String(request.data?.reference || "").trim().slice(0, 160);
+  const note = String(request.data?.note || "").trim().slice(0, 1000);
+  const idempotencyKey = String(request.data?.idempotencyKey || "").trim();
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (
+    !companyId ||
+    !Number.isSafeInteger(amount) ||
+    amount <= 0 ||
+    amount > 2_000_000_000 ||
+    !datePattern.test(issuedAt) ||
+    (dueAt && !datePattern.test(dueAt)) ||
+    (paidAt && !datePattern.test(paidAt)) ||
+    !/^[A-Za-z0-9_-]{16,100}$/.test(idempotencyKey)
+  ) {
+    throw new HttpsError("invalid-argument", "Datos de facturación inválidos.");
+  }
+
+  const companyRef = db.collection("companies").doc(companyId);
+  const company = await companyRef.get();
+  if (!company.exists) {
+    throw new HttpsError("not-found", "La empresa no existe.");
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const status = type === "payment"
+    ? "paid"
+    : dueAt && dueAt < today
+      ? "overdue"
+      : "unpaid";
+  const targetCollection = type === "payment"
+    ? "billing_payments"
+    : "billing_invoices";
+  const targetRef = companyRef.collection(targetCollection).doc();
+  const eventRef = db.collection("billing_events").doc(idempotencyKey);
+  const auditRef = db.collection("admin_audit").doc();
+
+  const result = await db.runTransaction(async (transaction) => {
+    const existingEvent = await transaction.get(eventRef);
+    if (existingEvent.exists) {
+      return {
+        duplicate: true,
+        recordId: String(existingEvent.data()?.recordId || ""),
+      };
+    }
+
+    transaction.create(targetRef, {
+      companyId,
+      type,
+      amount,
+      currency: "CLP",
+      issuedAt,
+      dueAt: dueAt || null,
+      paidAt: type === "payment" ? (paidAt || issuedAt) : null,
+      status,
+      reference: reference || null,
+      note: note || null,
+      source: "manual_admin",
+      idempotencyKey,
+      createdAt: FieldValue.serverTimestamp(),
+      createdBy: {
+        uid: caller.uid,
+        email: normalizeEmail(caller.token.email),
+      },
+      schemaVersion: 1,
+    });
+    transaction.create(eventRef, {
+      companyId,
+      type,
+      recordId: targetRef.id,
+      source: "manual_admin",
+      processedAt: FieldValue.serverTimestamp(),
+      processedByUid: caller.uid,
+      schemaVersion: 1,
+    });
+    transaction.create(auditRef, {
+      action: "record_billing_entry",
+      companyId,
+      recordId: targetRef.id,
+      billingType: type,
+      amount,
+      status,
+      performedByUid: caller.uid,
+      performedAt: FieldValue.serverTimestamp(),
+    });
+
+    if (type === "invoice" && status === "overdue") {
+      transaction.set(companyRef, {
+        status: "overdue",
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+      transaction.set(companyRef.collection("billing").doc("account"), {
+        companyId,
+        status: "past_due",
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: "admin",
+        schemaVersion: 1,
+      }, {merge: true});
+    }
+
+    return {duplicate: false, recordId: targetRef.id};
+  });
+
+  return {ok: true, ...result, status};
+});
+
+async function hasCompanyAccess(uid: string, companyId: string): Promise<boolean> {
+  const membership = await db.collection("companies").doc(companyId)
+    .collection("company_members").doc(uid).get();
+  return membership.exists && isActiveCompanyMembership(membership.data());
+}
+
+async function hasAnyCompanyAccess(uid: string): Promise<boolean> {
+  const memberships = await db.collectionGroup("company_members")
+    .where("uid", "==", uid)
+    .limit(20)
+    .get();
+  return memberships.docs.some((membership) =>
+    isActiveCompanyMembership(membership.data())
+  );
+}
+
+function matchIdFor(companyId: string, jobId: string, workerId: string): string {
+  return [companyId, jobId, workerId].join("_");
+}
+
+export const applyToJob = onCall(async (request) => {
+  const worker = await assertAuthenticated(request);
+  const companyId = String(request.data?.companyId || "").trim();
+  const jobId = String(request.data?.jobId || "").trim();
+  if (!companyId || !jobId) {
+    throw new HttpsError("invalid-argument", "Oferta inválida.");
+  }
+
+  const companyRef = db.collection("companies").doc(companyId);
+  const jobRef = companyRef.collection("jobs").doc(jobId);
+  const workerRef = db.collection("workers").doc(worker.uid);
+  const matchId = matchIdFor(companyId, jobId, worker.uid);
+  const matchRef = db.collection("matches").doc(matchId);
+  const workerApplicationRef = workerRef.collection("applications").doc(
+    companyId + "_" + jobId
+  );
+  const companyApplicationRef = jobRef.collection("applications").doc(
+    worker.uid
+  );
+
+  await db.runTransaction(async (transaction) => {
+    const [company, job, workerProfile, existingMatch] = await Promise.all([
+      transaction.get(companyRef),
+      transaction.get(jobRef),
+      transaction.get(workerRef),
+      transaction.get(matchRef),
+    ]);
+    if (!company.exists || company.data()?.status !== "active") {
+      throw new HttpsError("failed-precondition", "La empresa no está habilitada.");
+    }
+    if (
+      !job.exists ||
+      (job.data()?.isActive !== true && job.data()?.jobStatus !== "active")
+    ) {
+      throw new HttpsError("failed-precondition", "La oferta ya no está disponible.");
+    }
+    if (!workerProfile.exists) {
+      throw new HttpsError("failed-precondition", "Completa tu perfil antes de postular.");
+    }
+    if (
+      existingMatch.exists &&
+      !["withdrawn", "declined", "expired", "closed"].includes(
+        String(existingMatch.data()?.state || "")
+      )
+    ) {
+      return;
+    }
+
+    const application = {
+      jobId,
+      companyId,
+      jobTitle: String(job.data()?.title || ""),
+      companyName: String(company.data()?.name || ""),
+      workerId: worker.uid,
+      appliedAt: FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
+      status: "postulado",
+    };
+    transaction.set(matchRef, {
+      companyId,
+      jobId,
+      workerId: worker.uid,
+      jobTitle: String(job.data()?.title || ""),
+      companyName: String(company.data()?.name || ""),
+      source: "worker_application",
+      state: "worker_interested",
+      workerDecision: "interested",
+      companyDecision: "pending",
+      createdAt: existingMatch.data()?.createdAt || FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      expiresAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() + 30 * 24 * 60 * 60 * 1000
+      ),
+      lastActionBy: "worker",
+      lastActionByUid: worker.uid,
+      schemaVersion: 1,
+    }, {merge: true});
+    transaction.set(workerApplicationRef, application, {merge: true});
+    transaction.set(companyApplicationRef, application, {merge: true});
+  });
+
+  return {ok: true, matchId, state: "worker_interested"};
+});
+
+export const inviteWorkerToJob = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const companyId = String(request.data?.companyId || "").trim();
+  const jobId = String(request.data?.jobId || "").trim();
+  const workerId = String(request.data?.workerId || "").trim();
+  if (!companyId || !jobId || !workerId) {
+    throw new HttpsError("invalid-argument", "Invitación inválida.");
+  }
+  if (!(await hasCompanyAccess(actor.uid, companyId))) {
+    throw new HttpsError("permission-denied", "No representas a esta empresa.");
+  }
+
+  const companyRef = db.collection("companies").doc(companyId);
+  const jobRef = companyRef.collection("jobs").doc(jobId);
+  const workerRef = db.collection("workers").doc(workerId);
+  const matchId = matchIdFor(companyId, jobId, workerId);
+  const matchRef = db.collection("matches").doc(matchId);
+  await db.runTransaction(async (transaction) => {
+    const [company, job, worker, existing] = await Promise.all([
+      transaction.get(companyRef),
+      transaction.get(jobRef),
+      transaction.get(workerRef),
+      transaction.get(matchRef),
+    ]);
+    if (!company.exists || company.data()?.status !== "active") {
+      throw new HttpsError("failed-precondition", "La empresa no está habilitada.");
+    }
+    if (
+      !job.exists ||
+      (job.data()?.isActive !== true && job.data()?.jobStatus !== "active")
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Selecciona una oferta activa antes de invitar."
+      );
+    }
+    if (!worker.exists) {
+      throw new HttpsError("not-found", "El trabajador ya no está disponible.");
+    }
+    const workerDecision = existing.data()?.workerDecision || "pending";
+    const state = workerDecision === "interested"
+      ? "matched"
+      : "company_interested";
+    transaction.set(matchRef, {
+      companyId,
+      jobId,
+      workerId,
+      jobTitle: String(job.data()?.title || ""),
+      companyName: String(company.data()?.name || ""),
+      source: existing.data()?.source || "company_invitation",
+      state,
+      workerDecision,
+      companyDecision: "interested",
+      createdAt: existing.data()?.createdAt || FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      matchedAt: state === "matched"
+        ? FieldValue.serverTimestamp()
+        : existing.data()?.matchedAt || null,
+      expiresAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() + 30 * 24 * 60 * 60 * 1000
+      ),
+      lastActionBy: "company",
+      lastActionByUid: actor.uid,
+      schemaVersion: 1,
+    }, {merge: true});
+    if (state === "matched") {
+      const profile = worker.data() || {};
+      transaction.set(
+        companyRef.collection("contact_grants").doc(matchId),
+        {
+          matchId,
+          companyId,
+          jobId,
+          workerId,
+          status: "active",
+          contact: {
+            phone: profile.phone || null,
+            email: profile.email || null,
+            preferredChannel: profile.phone ? "whatsapp" : "email",
+          },
+          reason: "mutual_match",
+          grantedAt: FieldValue.serverTimestamp(),
+          expiresAt: admin.firestore.Timestamp.fromMillis(
+            Date.now() + 30 * 24 * 60 * 60 * 1000
+          ),
+          schemaVersion: 1,
+        },
+        {merge: true}
+      );
+    }
+  });
+  return {ok: true, matchId};
+});
+
+export const respondToMatch = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  const decision = parseMatchDecision(request.data?.decision);
+  if (!matchId || !decision) {
+    throw new HttpsError("invalid-argument", "Match inválido.");
+  }
+
+  const matchRef = db.collection("matches").doc(matchId);
+  const initialMatch = await matchRef.get();
+  if (!initialMatch.exists) {
+    throw new HttpsError("not-found", "El match no existe.");
+  }
+  const initial = initialMatch.data() || {};
+  const isWorkerActor = initial.workerId === actor.uid;
+  const isCompanyActor = !isWorkerActor &&
+    await hasCompanyAccess(actor.uid, initial.companyId);
+  if (!isWorkerActor && !isCompanyActor) {
+    throw new HttpsError("permission-denied", "No puedes responder este match.");
+  }
+
+  let nextState = "";
+  await db.runTransaction(async (transaction) => {
+    const currentSnap = await transaction.get(matchRef);
+    const current = currentSnap.data() || {};
+    if (isTerminalMatchState(current.state)) {
+      throw new HttpsError("failed-precondition", "El match ya está cerrado.");
+    }
+    if (!canRespondToMatchState(current.state)) {
+      throw new HttpsError("failed-precondition", "El match ya no admite nuevas decisiones.");
+    }
+
+    const workerDecision = isWorkerActor ? decision : current.workerDecision;
+    const companyDecision = isCompanyActor ? decision : current.companyDecision;
+    nextState = decision === "declined"
+      ? "declined"
+      : nextMatchState(workerDecision, companyDecision);
+    const update: Record<string, unknown> = {
+      workerDecision,
+      companyDecision,
+      state: nextState,
+      updatedAt: FieldValue.serverTimestamp(),
+      lastActionBy: isWorkerActor ? "worker" : "company",
+      lastActionByUid: actor.uid,
+    };
+    if (nextState === "matched") {
+      update.matchedAt = FieldValue.serverTimestamp();
+      const workerProfile = await transaction.get(
+        db.collection("workers").doc(current.workerId)
+      );
+      const profile = workerProfile.data() || {};
+      transaction.set(
+        db.collection("companies").doc(current.companyId)
+          .collection("contact_grants").doc(matchId),
+        {
+          matchId,
+          companyId: current.companyId,
+          jobId: current.jobId,
+          workerId: current.workerId,
+          status: "active",
+          contact: {
+            phone: profile.phone || null,
+            email: profile.email || null,
+            preferredChannel: profile.phone ? "whatsapp" : "email",
+          },
+          reason: "mutual_match",
+          grantedAt: FieldValue.serverTimestamp(),
+          expiresAt: admin.firestore.Timestamp.fromMillis(
+            Date.now() + 30 * 24 * 60 * 60 * 1000
+          ),
+          schemaVersion: 1,
+        },
+        {merge: true}
+      );
+    }
+    transaction.update(matchRef, update);
+  });
+
+  return {ok: true, matchId, state: nextState};
+});
+
+export const markMatchHired = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  const matchRef = db.collection("matches").doc(matchId);
+  const initialMatch = await matchRef.get();
+  if (!initialMatch.exists) {
+    throw new HttpsError("not-found", "El match no existe.");
+  }
+  const initialData = initialMatch.data() || {};
+  if (!(await hasCompanyAccess(actor.uid, initialData.companyId))) {
+    throw new HttpsError("permission-denied", "No representas a esta empresa.");
+  }
+  await db.runTransaction(async (transaction) => {
+    const match = await transaction.get(matchRef);
+    if (!match.exists || match.data()?.state !== "matched") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Solo un match confirmado puede marcarse como contratación."
+      );
+    }
+    transaction.update(matchRef, {
+      state: "hired",
+      hiredAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      lastActionBy: "company",
+      lastActionByUid: actor.uid,
+    });
+  });
+  return {ok: true, matchId, state: "hired"};
+});
+
+export const getMatchContact = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  const match = await db.collection("matches").doc(matchId).get();
+  if (!match.exists) {
+    throw new HttpsError("not-found", "El match no existe.");
+  }
+  const data = match.data() || {};
+  const workerIsActor = data.workerId === actor.uid;
+  const companyIsActor = await hasCompanyAccess(actor.uid, data.companyId);
+  if (!workerIsActor && !companyIsActor) {
+    throw new HttpsError("permission-denied", "No participas en este match.");
+  }
+  if (!["matched", "hired"].includes(data.state)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "El contacto se libera únicamente después del match."
+    );
+  }
+
+  if (workerIsActor) {
+    const company = await db.collection("companies").doc(data.companyId).get();
+    const companyData = company.data() || {};
+    const contact = {
+      phone: companyData.hrPhone || companyData.officialPhone || null,
+      email: companyData.hrEmail || companyData.contactEmail || null,
+      preferredChannel: companyData.hrPhone || companyData.officialPhone
+        ? "whatsapp"
+        : "email",
+    };
+    await db.collection("admin_audit").add({
+      action: "worker_view_company_contact",
+      companyId: data.companyId,
+      matchId,
+      workerId: data.workerId,
+      performedByUid: actor.uid,
+      performedAt: FieldValue.serverTimestamp(),
+    });
+    return {ok: true, contact};
+  }
+
+  const grant = await db.collection("companies").doc(data.companyId)
+    .collection("contact_grants").doc(matchId).get();
+  const grantData = grant.data() || {};
+  const expiresAt = grantData.expiresAt?.toMillis?.() || 0;
+  if (
+    !grant.exists ||
+    grantData.status !== "active" ||
+    expiresAt <= Date.now()
+  ) {
+    throw new HttpsError("failed-precondition", "El acceso al contacto expiró.");
+  }
+  await db.collection("admin_audit").add({
+    action: "view_match_contact",
+    companyId: data.companyId,
+    matchId,
+    workerId: data.workerId,
+    performedByUid: actor.uid,
+    performedAt: FieldValue.serverTimestamp(),
+  });
+  return {ok: true, contact: grantData.contact || {}};
+});
+
+export const submitMatchReview = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  const overall = Number(request.data?.overall);
+  const comment = String(request.data?.comment || "").trim().slice(0, 500);
+  if (!matchId || !Number.isInteger(overall) || overall < 1 || overall > 5) {
+    throw new HttpsError("invalid-argument", "Evaluación inválida.");
+  }
+
+  const matchRef = db.collection("matches").doc(matchId);
+  const match = await matchRef.get();
+  if (!match.exists) {
+    throw new HttpsError("not-found", "El match no existe.");
+  }
+  const data = match.data() || {};
+  if (!["hired", "closed"].includes(data.state)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "La evaluación requiere un trabajo verificado."
+    );
+  }
+  const workerIsActor = data.workerId === actor.uid;
+  const companyIsActor = await hasCompanyAccess(actor.uid, data.companyId);
+  if (!workerIsActor && !companyIsActor) {
+    throw new HttpsError("permission-denied", "No participaste en este trabajo.");
+  }
+
+  const side = workerIsActor ? "worker_to_company" : "company_to_worker";
+  const counterpartSide = workerIsActor
+    ? "company_to_worker"
+    : "worker_to_company";
+  const reviewRef = db.collection("match_reviews").doc(matchId + "_" + side);
+  const counterpartRef = db
+    .collection("match_reviews")
+    .doc(matchId + "_" + counterpartSide);
+  await db.runTransaction(async (transaction) => {
+    const [existing, counterpart] = await Promise.all([
+      transaction.get(reviewRef),
+      transaction.get(counterpartRef),
+    ]);
+    if (existing.exists) {
+      throw new HttpsError(
+        "already-exists",
+        "Ya evaluaste este trabajo."
+      );
+    }
+    transaction.create(reviewRef, {
+      matchId,
+      companyId: data.companyId,
+      workerId: data.workerId,
+      side,
+      authorUid: actor.uid,
+      targetType: workerIsActor ? "company" : "worker",
+      targetId: workerIsActor ? data.companyId : data.workerId,
+      overall,
+      comment: comment || null,
+      visible: counterpart.exists,
+      createdAt: FieldValue.serverTimestamp(),
+      schemaVersion: 1,
+    });
+    if (counterpart.exists) {
+      transaction.update(counterpartRef, {
+        visible: true,
+        revealedAt: FieldValue.serverTimestamp(),
+      });
+    }
+    const reputationRef = workerIsActor
+      ? db.collection("company_reputation").doc(data.companyId)
+      : db.collection("worker_reputation").doc(data.workerId);
+    transaction.set(reputationRef, {
+      ratingCount: FieldValue.increment(1),
+      ratingSum: FieldValue.increment(overall),
+      updatedAt: FieldValue.serverTimestamp(),
+      schemaVersion: 1,
+    }, {merge: true});
+  });
+  return {ok: true, matchId, side};
+});
+
+export const issueWorkerCredential = onCall(async (request) => {
+  const issuer = await assertAuthenticated(request);
+  const workerId = String(request.data?.workerId || "").trim();
+  const title = String(request.data?.title || "").trim().slice(0, 120);
+  const credentialType = String(request.data?.credentialType || "platform_course");
+  const companyId = String(request.data?.companyId || "").trim();
+  const matchId = String(request.data?.matchId || "").trim();
+  const allowedTypes = [
+    "platform_course",
+    "company_training",
+    "external_verified",
+  ];
+  if (!workerId || !title || !allowedTypes.includes(credentialType)) {
+    throw new HttpsError("invalid-argument", "Credencial inválida.");
+  }
+  const issuerIsSuperadmin = await hasCurrentSuperadminClaims(issuer.uid);
+  let canIssue = issuerIsSuperadmin;
+  if (!issuerIsSuperadmin && companyId && matchId && await hasCompanyAccess(issuer.uid, companyId)) {
+    const match = await db.collection("matches").doc(matchId).get();
+    const matchData = match.data() || {};
+    canIssue = match.exists &&
+      matchData.companyId === companyId &&
+      matchData.workerId === workerId &&
+      ["matched", "hired"].includes(String(matchData.state || ""));
+  }
+  if (!canIssue) {
+    throw new HttpsError("permission-denied", "No puedes emitir credenciales.");
+  }
+  const worker = await db.collection("workers").doc(workerId).get();
+  if (!worker.exists) {
+    throw new HttpsError("not-found", "El trabajador no existe.");
+  }
+  const credentialRef = db.collection("worker_credentials").doc();
+  await credentialRef.set({
+    workerId,
+    title,
+    credentialType,
+    issuerType: issuerIsSuperadmin ? "platform" : "company",
+    issuerId: issuerIsSuperadmin ? "agroconnect" : companyId,
+    issuedByUid: issuer.uid,
+    status: "active",
+    visibility: "public",
+    evidenceReference: String(request.data?.evidenceReference || "")
+      .trim()
+      .slice(0, 300) || null,
+    issuedAt: FieldValue.serverTimestamp(),
+    expiresAt: request.data?.expiresAt || null,
+    schemaVersion: 1,
+  });
+  return {ok: true, credentialId: credentialRef.id};
+});
+
+export const submitWorkerCredentialEvidence = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const worker = await db.collection("workers").doc(actor.uid).get();
+  if (!worker.exists) {
+    throw new HttpsError("failed-precondition", "Primero completa tu perfil laboral.");
+  }
+
+  const title = String(request.data?.title || "").trim().slice(0, 120);
+  const credentialType = String(request.data?.credentialType || "other")
+    .trim()
+    .slice(0, 50);
+  const evidenceReference = String(request.data?.evidenceReference || "")
+    .trim()
+    .slice(0, 300);
+  if (!title || !isSelfDeclaredCredentialType(credentialType)) {
+    throw new HttpsError("invalid-argument", "Indica el nombre de la certificación.");
+  }
+
+  let expiresAt: admin.firestore.Timestamp | null = null;
+  const expiresAtInput = String(request.data?.expiresAt || "").trim();
+  if (expiresAtInput) {
+    const parsed = new Date(`${expiresAtInput}T12:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new HttpsError("invalid-argument", "La fecha de vencimiento no es válida.");
+    }
+    expiresAt = admin.firestore.Timestamp.fromDate(parsed);
+  }
+
+  const credentialRef = db.collection("worker_credentials").doc();
+  await credentialRef.set({
+    workerId: actor.uid,
+    title,
+    credentialType,
+    issuerType: "self_declared",
+    issuerId: actor.uid,
+    issuedByUid: actor.uid,
+    status: "pending",
+    visibility: "private",
+    evidenceReference: evidenceReference || null,
+    submittedAt: FieldValue.serverTimestamp(),
+    issuedAt: null,
+    expiresAt,
+    schemaVersion: 1,
+  });
+  return {ok: true, credentialId: credentialRef.id, status: "pending"};
+});
+
+export const listMatchWorkerCredentials = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  const match = await db.collection("matches").doc(matchId).get();
+  if (!match.exists) {
+    throw new HttpsError("not-found", "El match no existe.");
+  }
+  const matchData = match.data() || {};
+  if (!(await hasCompanyAccess(actor.uid, matchData.companyId))) {
+    throw new HttpsError("permission-denied", "No representas a esta empresa.");
+  }
+  if (!["matched", "hired", "closed"].includes(String(matchData.state || ""))) {
+    throw new HttpsError("failed-precondition", "Las credenciales se revisan después del match.");
+  }
+
+  const credentials = await db.collection("worker_credentials")
+    .where("workerId", "==", matchData.workerId)
+    .limit(50)
+    .get();
+  return {
+    ok: true,
+    credentials: credentials.docs.map((credential) => {
+      const data = credential.data();
+      return {
+        id: credential.id,
+        title: data.title || "Credencial",
+        credentialType: data.credentialType || "other",
+        status: data.status || "pending",
+        evidenceReference: data.evidenceReference || null,
+        expiresAt: data.expiresAt?.toDate?.().toISOString?.() || null,
+      };
+    }),
+  };
+});
+
+export const reviewWorkerCredential = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  const credentialId = String(request.data?.credentialId || "").trim();
+  const decision = parseCredentialDecision(request.data?.decision);
+  if (!matchId || !credentialId || !decision) {
+    throw new HttpsError("invalid-argument", "Decisión de credencial inválida.");
+  }
+  const matchRef = db.collection("matches").doc(matchId);
+  const credentialRef = db.collection("worker_credentials").doc(credentialId);
+  const [match, credential] = await Promise.all([
+    matchRef.get(),
+    credentialRef.get(),
+  ]);
+  if (!match.exists || !credential.exists) {
+    throw new HttpsError("not-found", "No encontramos el match o la credencial.");
+  }
+  const matchData = match.data() || {};
+  const credentialData = credential.data() || {};
+  if (!(await hasCompanyAccess(actor.uid, matchData.companyId))) {
+    throw new HttpsError("permission-denied", "No representas a esta empresa.");
+  }
+  if (!["matched", "hired", "closed"].includes(String(matchData.state || ""))) {
+    throw new HttpsError("failed-precondition", "La revisión requiere un match confirmado.");
+  }
+  if (credentialData.workerId !== matchData.workerId) {
+    throw new HttpsError("permission-denied", "La credencial no pertenece a este trabajador.");
+  }
+
+  await db.runTransaction(async (transaction) => {
+    const [currentMatch, currentCredential] = await Promise.all([
+      transaction.get(matchRef),
+      transaction.get(credentialRef),
+    ]);
+    const currentMatchData = currentMatch.data() || {};
+    const currentCredentialData = currentCredential.data() || {};
+    if (!currentMatch.exists || !["matched", "hired", "closed"].includes(String(currentMatchData.state || ""))) {
+      throw new HttpsError("failed-precondition", "La revisión requiere un match confirmado.");
+    }
+    if (!currentCredential.exists || currentCredentialData.workerId !== currentMatchData.workerId) {
+      throw new HttpsError("permission-denied", "La credencial no pertenece a este trabajador.");
+    }
+    if (currentCredentialData.status !== "pending") {
+      throw new HttpsError("already-exists", "Esta credencial ya fue revisada y no puede modificarse.");
+    }
+    transaction.set(credentialRef, {
+      status: decision === "verified" ? "active" : "rejected",
+      visibility: decision === "verified" ? "public" : "private",
+      issuerType: decision === "verified" ? "company_verified" : "self_declared",
+      issuerId: decision === "verified" ? currentMatchData.companyId : currentCredentialData.issuerId,
+      reviewedByUid: actor.uid,
+      reviewedCompanyId: currentMatchData.companyId,
+      reviewedAt: FieldValue.serverTimestamp(),
+      issuedAt: decision === "verified" ? FieldValue.serverTimestamp() : null,
+    }, {merge: true});
+    transaction.create(db.collection("admin_audit").doc(), {
+      action: "review_worker_credential",
+      matchId,
+      companyId: currentMatchData.companyId,
+      workerId: currentMatchData.workerId,
+      credentialId,
+      decision,
+      performedByUid: actor.uid,
+      performedAt: FieldValue.serverTimestamp(),
+    });
+  });
+  return {ok: true, credentialId, status: decision === "verified" ? "active" : "rejected"};
+});
+
+async function upsertDiscoverableWorker(uid: string, data: any) {
+  const fullName = String(data?.displayName || data?.fullName || "").trim();
+  const nameParts = fullName.split(/\s+/).filter(Boolean);
+  const safeName = nameParts.length > 1
+    ? nameParts[0] + " " + nameParts[1].slice(0, 1) + "."
+    : nameParts[0] || "Trabajador";
+  await db.collection("discoverableWorkers").doc(uid).set({
+    workerId: uid,
+    displayName: safeName,
+    region: String(data?.region || ""),
+    commune: String(data?.commune || data?.comuna || ""),
+    primaryTrade: String(data?.primaryTrade || ""),
+    sectors: Array.isArray(data?.sectors) ? data.sectors.slice(0, 10) : [],
+    skills: Array.isArray(data?.skills) ? data.skills.slice(0, 20) : [],
+    experienceTags: Array.isArray(data?.experienceTags)
+      ? data.experienceTags.slice(0, 20)
+      : [],
+    mobility: ["needs_transport", "public_transport", "own_transport"]
+      .includes(String(data?.mobility || ""))
+      ? data.mobility
+      : null,
+    preferredShift: ["day", "night", "rotating", "any"]
+      .includes(String(data?.preferredShift || ""))
+      ? data.preferredShift
+      : "any",
+    os10Status: ["none", "in_process", "valid", "expired"]
+      .includes(String(data?.os10Status || ""))
+      ? data.os10Status
+      : "none",
+    availabilityStatus: data?.available === false || data?.isAvailable === false
+      ? "unavailable"
+      : "available",
+    isAvailable: data?.available !== false && data?.isAvailable !== false,
+    updatedAt: FieldValue.serverTimestamp(),
+    schemaVersion: 2,
+  }, {merge: false});
+}
+
+export const onWorkerDiscoverableCreated = onDocumentCreated(
+  "workers/{workerId}",
+  async (event) => {
+    if (event.data) {
+      await upsertDiscoverableWorker(event.params.workerId, event.data.data());
+    }
+  }
+);
+
+export const onWorkerDiscoverableUpdated = onDocumentUpdated(
+  "workers/{workerId}",
+  async (event) => {
+    if (event.data?.after) {
+      await upsertDiscoverableWorker(
+        event.params.workerId,
+        event.data.after.data()
+      );
+    }
+  }
+);
 
 /**
  * =========================
@@ -170,8 +1226,15 @@ export const syncUserAccess = onCall(async (request) => {
  */
 export const syncSuperadminClaims = onCall(async (request) => {
   const user = await assertAuthenticated(request);
+  if (!isVerifiedGoogleIdentity(user.token)) {
+    throw new HttpsError(
+      "permission-denied",
+      "El acceso de SuperAdmin requiere una cuenta Google verificada."
+    );
+  }
   const email = normalizeEmail(user.token.email);
-  if (!SUPERADMIN_EMAILS.includes(email)) {
+  const superadminEmails = getSuperadminEmails();
+  if (!superadminEmails.includes(email)) {
     throw new HttpsError("permission-denied", "No tienes permisos de SuperAdmin.");
   }
 
@@ -206,10 +1269,17 @@ export const syncSuperadminClaims = onCall(async (request) => {
  */
 export const setSuperadminByEmail = onCall(async (request) => {
   const user = await assertAuthenticated(request);
+  if (!isVerifiedGoogleIdentity(user.token)) {
+    throw new HttpsError(
+      "permission-denied",
+      "La gestión de SuperAdmin requiere una cuenta Google verificada."
+    );
+  }
   const callerEmail = normalizeEmail(user.token.email);
-  const callerIsSuperadmin = isSuperAdminToken(user.token);
+  const callerIsSuperadmin = await hasCurrentSuperadminClaims(user.uid);
 
-  if (!callerIsSuperadmin && !SUPERADMIN_EMAILS.includes(callerEmail)) {
+  const superadminEmails = getSuperadminEmails();
+  if (!callerIsSuperadmin && !superadminEmails.includes(callerEmail)) {
     throw new HttpsError("permission-denied", "No tienes permisos para gestionar superadmins.");
   }
 
@@ -225,6 +1295,17 @@ export const setSuperadminByEmail = onCall(async (request) => {
     targetUser = await admin.auth().getUserByEmail(targetEmail);
   } catch (error) {
     throw new HttpsError("not-found", "No se encontró un usuario con ese email.");
+  }
+
+  if (
+    makeSuperadmin &&
+    (!targetUser.emailVerified ||
+      !targetUser.providerData.some((provider) => provider.providerId === "google.com"))
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "El usuario objetivo debe verificar su identidad mediante Google."
+    );
   }
 
   const existingClaims = targetUser.customClaims || {};
@@ -243,6 +1324,9 @@ export const setSuperadminByEmail = onCall(async (request) => {
   }
 
   await admin.auth().setCustomUserClaims(targetUser.uid, nextClaims);
+  if (!makeSuperadmin) {
+    await admin.auth().revokeRefreshTokens(targetUser.uid);
+  }
 
   await db
     .collection("users")
@@ -459,6 +1543,7 @@ async function upsertPublicJob(companyId: string, jobId: string, data: any) {
     startDate: data?.startDate ?? null,
     location: data?.location ?? "",
     coordinates: data?.coordinates ?? null,
+    sector: data?.sector === "security" ? "security" : "agriculture",
     category: data?.category ?? null,
     paymentType: data?.paymentType ?? null,
     payMode: data?.payMode ?? null,
@@ -466,7 +1551,16 @@ async function upsertPublicJob(companyId: string, jobId: string, data: any) {
     payDetail: data?.payDetail ?? null,
     skillsRequired: data?.skillsRequired ?? null,
     benefits: data?.benefits ?? null,
+    transportMode: data?.transportMode ?? null,
     transportInfo: data?.transportInfo ?? null,
+    pickupPoints: data?.pickupPoints ?? null,
+    departureTime: data?.departureTime ?? null,
+    returnTime: data?.returnTime ?? null,
+    transportCost: data?.transportCost ?? null,
+    shiftType: data?.shiftType ?? null,
+    shiftPattern: data?.shiftPattern ?? null,
+    requiresOs10: data?.requiresOs10 ?? null,
+    facilityType: data?.facilityType ?? null,
     otherBenefits: data?.otherBenefits ?? null,
     jobStatus: data?.jobStatus ?? "active",
     isActive: data?.isActive ?? true,
@@ -671,7 +1765,7 @@ export const sendLeadEmail = onCall({ region: "us-central1" }, async (request) =
     throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
   }
 
-  if (!isSuperAdminToken(user.token)) {
+  if (!await hasCurrentSuperadminClaims(user.uid)) {
     throw new HttpsError("permission-denied", "No tienes permisos para enviar correos.");
   }
 
@@ -740,7 +1834,7 @@ export const runOperationalAudit = onCall(
   },
   async (request) => {
     const user = await assertAuthenticated(request);
-    if (!isSuperAdminToken(user.token)) {
+    if (!await hasCurrentSuperadminClaims(user.uid)) {
       throw new HttpsError("permission-denied", "No tienes permisos para ejecutar auditorías.");
     }
 
@@ -790,11 +1884,11 @@ export const runOperationalAudit = onCall(
 
     const prompt = `Eres un auditor operativo para AgroConnect. Analiza las métricas y devuelve SOLO JSON estricto con esta forma:
 {
-  \"healthScore\": 0-100,
-  \"summary\": \"string breve\",
-  \"risks\": [\"...\"],
-  \"recommendations\": [\"...\"],
-  \"dataQualityNotes\": [\"...\"]
+  "healthScore": 0-100,
+  "summary": "string breve",
+  "risks": ["..."],
+  "recommendations": ["..."],
+  "dataQualityNotes": ["..."]
 }
 
 Métricas:
@@ -876,12 +1970,12 @@ export const redactarDifusion = onCall(
       throw new HttpsError("failed-precondition", "IA no configurada aún.");
     }
 
-    const role = await getUserRole(user.uid);
-    if (!isSuperAdminToken(user.token) && !["company_admin", "company_hr"].includes(role)) {
+    const isSuperadmin = await hasCurrentSuperadminClaims(user.uid);
+    if (!isSuperadmin && !await hasAnyCompanyAccess(user.uid)) {
       throw new HttpsError("permission-denied", "No tienes permisos para usar la IA.");
     }
 
-    const context = String(request.data?.context || "").trim();
+    const context = String(request.data?.context || "").trim().slice(0, 4000);
     const campaignType = String(request.data?.campaignType || "general").trim();
     if (!context) {
       throw new HttpsError("invalid-argument", "Contexto requerido.");
@@ -910,12 +2004,12 @@ export const generateJobDescription = onCall(
       throw new HttpsError("failed-precondition", "IA no configurada aún.");
     }
 
-    const role = await getUserRole(user.uid);
-    if (!isSuperAdminToken(user.token) && !["company_admin", "company_hr"].includes(role)) {
+    const isSuperadmin = await hasCurrentSuperadminClaims(user.uid);
+    if (!isSuperadmin && !await hasAnyCompanyAccess(user.uid)) {
       throw new HttpsError("permission-denied", "No tienes permisos para usar la IA.");
     }
 
-    const basicInfo = String(request.data?.basicInfo || "").trim();
+    const basicInfo = String(request.data?.basicInfo || "").trim().slice(0, 4000);
     if (!basicInfo) {
       throw new HttpsError("invalid-argument", "Información base requerida.");
     }
@@ -934,7 +2028,7 @@ export const aiReview = onCall(
   },
   async (request) => {
     const user = await assertAuthenticated(request);
-    if (!isSuperAdminToken(user.token)) {
+    if (!await hasCurrentSuperadminClaims(user.uid)) {
       throw new HttpsError("permission-denied", "No tienes permisos para ejecutar AI Review.");
     }
 
@@ -1159,3 +2253,4 @@ export const commsOutboxWatchdog = onSchedule("every 10 minutes", async () => {
   });
   await batch.commit();
 });
+

@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+build-output/
 *.local
 
 # Local Firebase Admin credentials
@@ -27,3 +28,9 @@ serviceAccountKey.json
 *.sln
 *.sw?
 .firebase/hosting.*.cache
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.local.example

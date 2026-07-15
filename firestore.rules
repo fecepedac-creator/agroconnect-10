@@ -25,7 +25,7 @@ service cloud.firestore {
 
     function myRole() {
       return signedIn()
-        && myUser().exists
+        && exists(/databases/$(database)/documents/users/$(myUid()))
         && myUser().data.role != null
           ? myUser().data.role
           : "none";
@@ -38,12 +38,12 @@ service cloud.firestore {
     function isSuperAdmin() {
       return signedIn()
         && (
-          request.auth.token.admin == true
-          || request.auth.token.superadmin == true
-          || request.auth.token.role == "ADMIN"
-          || request.auth.token.role == "admin"
-          || request.auth.token.role == "SUPERADMIN"
-          || request.auth.token.role == "superadmin"
+          request.auth.token.get("admin", false) == true
+          || request.auth.token.get("superadmin", false) == true
+          || request.auth.token.get("role", "") == "ADMIN"
+          || request.auth.token.get("role", "") == "admin"
+          || request.auth.token.get("role", "") == "SUPERADMIN"
+          || request.auth.token.get("role", "") == "superadmin"
         );
     }
 
@@ -67,8 +67,77 @@ service cloud.firestore {
         && request.resource.data.get('companyId', null) == resource.data.get('companyId', null);
     }
 
+    function hasActiveCompanyMembership(companyId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/companies/$(companyId)/company_members/$(myUid()))
+        && get(/databases/$(database)/documents/companies/$(companyId)/company_members/$(myUid())).data.get('status', '') == 'active'
+        && get(/databases/$(database)/documents/companies/$(companyId)/company_members/$(myUid())).data.get('role', '') in ['company_admin', 'company_hr'];
+    }
+
     function isMyCompany(companyId) {
-      return isCompany() && myCompanyId() == companyId;
+      return hasActiveCompanyMembership(companyId);
+    }
+
+    function canManageCompanyMembers(companyId) {
+      return isSuperAdmin()
+        || (
+          isMyCompany(companyId)
+          && (
+            myRole() == 'company_admin'
+            || (
+              hasActiveCompanyMembership(companyId)
+              && get(/databases/$(database)/documents/companies/$(companyId)/company_members/$(myUid())).data.get('role', '') == 'company_admin'
+            )
+          )
+        );
+    }
+
+    function companyCanPublish(companyId) {
+      return exists(/databases/$(database)/documents/companies/$(companyId))
+        && get(/databases/$(database)/documents/companies/$(companyId)).data.get('status', '') == 'active';
+    }
+
+    function jobIsPublished(data) {
+      return data.get('isActive', false) == true
+        || data.get('jobStatus', '') == 'active';
+    }
+
+    function companyJobWriteIsAllowed(companyId) {
+      return !jobIsPublished(request.resource.data) || companyCanPublish(companyId);
+    }
+
+    function applicationCreateIsValid(companyId, jobId, workerId) {
+      return request.resource.data.keys().hasAll([
+          'workerId', 'companyId', 'jobId', 'jobTitle', 'companyName',
+          'appliedAt', 'createdAt', 'status'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'workerId', 'companyId', 'jobId', 'jobTitle', 'companyName',
+          'appliedAt', 'createdAt', 'status'
+        ])
+        && request.resource.data.workerId == workerId
+        && request.resource.data.companyId == companyId
+        && request.resource.data.jobId == jobId
+        && request.resource.data.status == 'postulado'
+        && request.resource.data.jobTitle is string
+        && request.resource.data.jobTitle.size() > 0
+        && request.resource.data.jobTitle.size() <= 200
+        && request.resource.data.companyName is string
+        && request.resource.data.companyName.size() <= 200
+        && request.resource.data.appliedAt == request.time
+        && request.resource.data.createdAt == request.time
+        && exists(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId))
+        && jobIsPublished(get(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId)).data);
+    }
+
+    function companyApplicationCreateIsValid(companyId, jobId, workerId, appId) {
+      return appId == workerId
+        && applicationCreateIsValid(companyId, jobId, workerId);
+    }
+
+    function workerApplicationCreateIsValid(companyId, jobId, workerId, appId) {
+      return appId == companyId + '_' + jobId
+        && applicationCreateIsValid(companyId, jobId, workerId);
     }
 
     /* ======================
@@ -91,6 +160,29 @@ service cloud.firestore {
         && request.resource.data.get('status', null) == resource.data.get('status', null);
     }
 
+    function workerUsernameCreateIsValid(rut) {
+      return request.resource.data.uid == myUid()
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 0
+        && !exists(/databases/$(database)/documents/worker_usernames/$(rut));
+    }
+
+    function workerUsernameUpdateIsSafe() {
+      return request.resource.data.get('uid', null) == resource.data.get('uid', null)
+        && request.resource.data.get('email', null) == resource.data.get('email', null);
+    }
+
+    function workerApplicationUpdateIsSafe() {
+      return request.resource.data.get('workerId', null) == resource.data.get('workerId', null)
+        && request.resource.data.get('companyId', null) == resource.data.get('companyId', null)
+        && request.resource.data.get('jobId', null) == resource.data.get('jobId', null)
+        && request.resource.data.get('status', null) == resource.data.get('status', null)
+        && request.resource.data.get('attendanceStatus', null) == resource.data.get('attendanceStatus', null)
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && request.resource.data.get('decisionBy', null) == resource.data.get('decisionBy', null)
+        && request.resource.data.get('decisionAt', null) == resource.data.get('decisionAt', null);
+    }
+
     /* ======================
        USERS
        ====================== */
@@ -106,6 +198,7 @@ service cloud.firestore {
         && uid == myUid()
         && userUpdateKeepsRoleAndCompany();
       allow delete: if isSuperAdmin();
+
     }
 
     /* ======================
@@ -124,9 +217,66 @@ service cloud.firestore {
 
     match /publicWorkers/{workerId} {
       allow read: if isSuperAdmin()
-                  || isCompany()
                   || (signedIn() && workerId == myUid());
       allow write: if isSuperAdmin();
+    }
+
+    match /discoverableWorkers/{workerId} {
+      allow read: if isSuperAdmin()
+        || hasActiveCompanyMembership(myCompanyId())
+        || (signedIn() && workerId == myUid());
+      allow write: if false;
+    }
+
+    match /matches/{matchId} {
+      allow read: if isSuperAdmin()
+        || (isWorker() && resource.data.workerId == myUid())
+        || isMyCompany(resource.data.companyId);
+      allow write: if false;
+    }
+
+    match /match_reviews/{reviewId} {
+      allow read: if isSuperAdmin()
+        || (signedIn() && resource.data.authorUid == myUid())
+        || (
+          isMyCompany(resource.data.companyId)
+          && (
+            resource.data.side == 'company_to_worker'
+            || resource.data.visible == true
+          )
+        )
+        || (
+          resource.data.visible == true
+          && isWorker()
+          && resource.data.workerId == myUid()
+        );
+      allow write: if false;
+    }
+
+    match /worker_credentials/{credentialId} {
+      allow read: if isSuperAdmin()
+        || (isWorker() && resource.data.workerId == myUid())
+        || (
+          isCompany()
+          && hasActiveCompanyMembership(myCompanyId())
+          && resource.data.status == 'active'
+          && resource.data.visibility == 'public'
+        );
+      allow write: if false;
+    }
+
+    match /worker_reputation/{workerId} {
+      allow read: if isSuperAdmin()
+        || hasActiveCompanyMembership(myCompanyId())
+        || (isWorker() && workerId == myUid());
+      allow write: if false;
+    }
+
+    match /company_reputation/{companyId} {
+      allow read: if isSuperAdmin()
+        || isWorker()
+        || isMyCompany(companyId);
+      allow write: if false;
     }
 
     /* ======================
@@ -172,7 +322,19 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
 
       match /applications/{appId} {
-        allow read, write: if signedIn() && uid == myUid();
+        allow read: if signedIn() && uid == myUid();
+        allow create: if signedIn()
+          && uid == myUid()
+          && workerApplicationCreateIsValid(
+            request.resource.data.companyId,
+            request.resource.data.jobId,
+            uid,
+            appId
+          );
+        allow update: if signedIn()
+          && uid == myUid()
+          && workerApplicationUpdateIsSafe();
+        allow delete: if false;
       }
 
       match /documents/{docId} {
@@ -181,11 +343,11 @@ service cloud.firestore {
     }
 
     match /worker_usernames/{rut} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
-        && request.resource.data.uid == myUid()
-        && request.resource.data.email is string
-        && request.resource.data.email.size() > 0;
+      allow read: if signedIn() && resource.data.uid == myUid();
+      allow create: if signedIn() && workerUsernameCreateIsValid(rut);
+      allow update: if signedIn()
+        && resource.data.uid == myUid()
+        && workerUsernameUpdateIsSafe();
       allow delete: if false;
     }
 
@@ -205,6 +367,24 @@ service cloud.firestore {
 
       allow delete: if isSuperAdmin();
 
+      match /company_members/{memberUid} {
+        allow read: if isSuperAdmin()
+          || (signedIn() && memberUid == myUid())
+          || canManageCompanyMembers(companyId);
+        allow write: if false;
+      }
+
+      match /contact_grants/{grantId} {
+        allow read: if (
+          isSuperAdmin()
+          || isMyCompany(companyId)
+          || (isWorker() && resource.data.workerId == myUid())
+        )
+        && resource.data.status == 'active'
+        && resource.data.expiresAt > request.time;
+        allow write: if false;
+      }
+
       /* ----- JOBS ----- */
       match /jobs/{jobId} {
 
@@ -212,7 +392,8 @@ service cloud.firestore {
                     || isMyCompany(companyId)
                     || (isWorker() && resource.data.get('isActive', false) == true);
 
-        allow create, update: if isSuperAdmin() || isMyCompany(companyId);
+        allow create, update: if isSuperAdmin()
+                             || (isMyCompany(companyId) && companyJobWriteIsAllowed(companyId));
         allow delete: if isSuperAdmin() || isMyCompany(companyId);
 
         /* ----- APPLICATIONS ----- */
@@ -224,12 +405,13 @@ service cloud.firestore {
                           && request.auth.uid == resource.data.workerId);
 
           allow create: if isWorker()
-                        && request.resource.data.workerId == myUid();
+                        && companyApplicationCreateIsValid(companyId, jobId, myUid(), appId);
 
           allow update: if isSuperAdmin()
                         || isMyCompany(companyId)
                         || (isWorker()
-                            && request.auth.uid == resource.data.workerId);
+                            && request.auth.uid == resource.data.workerId
+                            && workerApplicationUpdateIsSafe());
 
           allow delete: if isSuperAdmin();
         }
@@ -263,14 +445,19 @@ service cloud.firestore {
       }
 
       /* ----- BILLING ----- */
+      match /billing/{documentId} {
+        allow read: if isSuperAdmin() || isMyCompany(companyId);
+        allow write: if false;
+      }
+
       match /billing_payments/{paymentId} {
-        allow read, write: if isSuperAdmin() || isMyCompany(companyId);
-        allow delete: if isSuperAdmin();
+        allow read: if isSuperAdmin() || isMyCompany(companyId);
+        allow write: if false;
       }
 
       match /billing_invoices/{invoiceId} {
-        allow read, write: if isSuperAdmin() || isMyCompany(companyId);
-        allow delete: if isSuperAdmin();
+        allow read: if isSuperAdmin() || isMyCompany(companyId);
+        allow write: if false;
       }
 
       /* ----- BROADCASTS ----- */
@@ -314,7 +501,7 @@ service cloud.firestore {
        MENSAJERÍA / EMAIL
        ====================== */
 
-    // Cola de mensajes (UI → Function / Trigger Email)
+    // Cola de mensajes (UI ? Function / Trigger Email)
     match /comms_outbox/{docId} {
       allow create: if isSuperAdmin();
       allow read: if isSuperAdmin()
@@ -369,3 +556,5 @@ service cloud.firestore {
     }
   }
 }
+
+

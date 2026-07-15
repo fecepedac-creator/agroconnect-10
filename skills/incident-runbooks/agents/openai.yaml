@@ -1,0 +1,3 @@
+﻿interface:
+  display_name: "Incident Runbooks"
+  short_description: "Gestiona incidentes con respuesta estandar"
