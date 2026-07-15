@@ -305,6 +305,16 @@ service cloud.firestore {
       allow write: if false;  // Only Cloud Functions via Admin SDK
     }
 
+    match /data_deletion_requests/{uid} {
+      allow read: if isSuperAdmin() || (signedIn() && uid == myUid());
+      allow write: if false;  // Only Cloud Functions via Admin SDK
+    }
+
+    match /safety_reports/{reportId} {
+      allow read, update: if isSuperAdmin();
+      allow create, delete: if false;  // Only Cloud Functions via Admin SDK
+    }
+
     /* ======================
        WORKERS
        ====================== */

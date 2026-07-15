@@ -28,6 +28,8 @@ serviceAccountKey.json
 *.sln
 *.sw?
 .firebase/hosting.*.cache
+playwright-report/
+test-results/
 
 # Environment files
 .env

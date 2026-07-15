@@ -526,6 +526,26 @@ async function main() {
     }));
   }));
 
+  results.push(await runCase('abuse: Worker cannot create safety reports directly', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(setDoc(doc(db, 'safety_reports', 'report_browser'), {
+      reporterUid: 'workerA',
+      companyId: COMPANY_ID,
+      jobId: JOB_ID,
+      category: 'false_offer',
+      details: 'Intento directo desde navegador',
+      status: 'open',
+    }));
+  }));
+
+  results.push(await runCase('abuse: Worker cannot forge deletion request status', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(setDoc(doc(db, 'data_deletion_requests', 'workerA'), {
+      uid: 'workerA',
+      status: 'completed',
+    }));
+  }));
+
   results.push(await runCase('legit: Active company membership grants company access', async () => {
     const db = companyDb('companyMemberA');
     await assertSucceeds(getDoc(doc(db, 'companies', COMPANY_ID)));

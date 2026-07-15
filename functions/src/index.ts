@@ -1160,12 +1160,17 @@ export const reviewWorkerCredential = onCall(async (request) => {
 });
 
 async function upsertDiscoverableWorker(uid: string, data: any) {
+  const discoverableRef = db.collection("discoverableWorkers").doc(uid);
+  if (data?.discoverable !== true) {
+    await discoverableRef.delete();
+    return;
+  }
   const fullName = String(data?.displayName || data?.fullName || "").trim();
   const nameParts = fullName.split(/\s+/).filter(Boolean);
   const safeName = nameParts.length > 1
     ? nameParts[0] + " " + nameParts[1].slice(0, 1) + "."
     : nameParts[0] || "Trabajador";
-  await db.collection("discoverableWorkers").doc(uid).set({
+  await discoverableRef.set({
     workerId: uid,
     displayName: safeName,
     region: String(data?.region || ""),
@@ -1217,6 +1222,67 @@ export const onWorkerDiscoverableUpdated = onDocumentUpdated(
     }
   }
 );
+
+export const requestWorkerDataDeletion = onCall(async (request) => {
+  const user = await assertAuthenticated(request);
+  const workerRef = db.collection("workers").doc(user.uid);
+  const userRef = db.collection("users").doc(user.uid);
+  const discoverableRef = db.collection("discoverableWorkers").doc(user.uid);
+  const deletionRef = db.collection("data_deletion_requests").doc(user.uid);
+  const batch = db.batch();
+
+  batch.set(deletionRef, {
+    uid: user.uid,
+    email: normalizeEmail(user.token.email),
+    status: "pending",
+    requestedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    source: "worker_self_service",
+  }, {merge: true});
+  batch.set(workerRef, {
+    available: false,
+    discoverable: false,
+    deletionStatus: "pending",
+    deletionRequestedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, {merge: true});
+  batch.set(userRef, {
+    deletionStatus: "pending",
+    deletionRequestedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, {merge: true});
+  batch.delete(discoverableRef);
+  await batch.commit();
+
+  return {ok: true, status: "pending"};
+});
+
+export const submitSafetyReport = onCall(async (request) => {
+  const user = await assertAuthenticated(request);
+  const category = String(request.data?.category || "");
+  const details = String(request.data?.details || "").trim();
+  const companyId = String(request.data?.companyId || "").trim();
+  const jobId = String(request.data?.jobId || "").trim();
+  const allowedCategories = ["false_offer", "worker_fee", "different_conditions", "discrimination", "privacy", "other"];
+
+  if (!allowedCategories.includes(category) || !companyId || !jobId || details.length < 10 || details.length > 1000) {
+    throw new HttpsError("invalid-argument", "Completa una categoría y una descripción válida.");
+  }
+
+  const report = await db.collection("safety_reports").add({
+    reporterUid: user.uid,
+    reporterEmail: normalizeEmail(user.token.email),
+    category,
+    details,
+    companyId,
+    jobId,
+    status: "open",
+    source: "worker_job_detail",
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return {ok: true, reportId: report.id};
+});
 
 /**
  * =========================

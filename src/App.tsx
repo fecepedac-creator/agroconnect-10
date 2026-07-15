@@ -63,6 +63,7 @@ const CompanySettings = lazy(() => import("./components/CompanySettings"));
 const Broadcasts = lazy(() => import("./components/Broadcasts"));
 const WorkerAuthScreen = lazy(() => import("./components/WorkerAuthScreen"));
 const CompanyMatches = lazy(() => import("./components/CompanyMatches"));
+const LegalPage = lazy(() => import("./components/LegalPage"));
 
 const App: React.FC = () => {
   const [userRole, setUserRole] = useState<UserRole | null>(null);
@@ -78,14 +79,12 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Data State
-  const [workers, setWorkers] = useState<Worker[]>(INITIAL_WORKERS);
-  const [jobs, setJobs] = useState<JobOffer[]>(INITIAL_JOBS);
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [jobs, setJobs] = useState<JobOffer[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companiesLoading, setCompaniesLoading] = useState(true);
   const [companiesError, setCompaniesError] = useState<string | null>(null);
-  const [globalWorkers, setGlobalWorkers] = useState<Worker[]>(
-    (ENHANCED_DEMO_GLOBAL as any) || ENHANCED_DEMO_WORKERS || MOCK_GLOBAL_WORKERS
-  );
+  const [globalWorkers, setGlobalWorkers] = useState<Worker[]>([]);
   // Public workers from Firestore (for Global Search)
   const [publicWorkers, setPublicWorkers] = useState<Worker[]>([]);
   const [publicWorkersLoading, setPublicWorkersLoading] = useState(true);
@@ -115,6 +114,21 @@ const App: React.FC = () => {
 
   const handleRadarClick = () => setCurrentView(AppView.GLOBAL_SEARCH);
   const isDemoMode = Boolean(adminConfig.demoMode);
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setWorkers(INITIAL_WORKERS);
+      setJobs(INITIAL_JOBS);
+      setGlobalWorkers(
+        (ENHANCED_DEMO_GLOBAL as Worker[]) || ENHANCED_DEMO_WORKERS || MOCK_GLOBAL_WORKERS
+      );
+      return;
+    }
+
+    setWorkers([]);
+    setJobs([]);
+    setGlobalWorkers([]);
+  }, [isDemoMode]);
   const handleRoleSelect = (role: UserRole, companyData?: Company) => {
     if (role === UserRole.COMPANY && companyData) {
       setUserRole(role);
@@ -337,8 +351,7 @@ const App: React.FC = () => {
       },
       (error) => {
         console.error("Error fetching public workers:", error);
-        // Fallback to demo data if collection doesn't exist yet
-        setPublicWorkers(ENHANCED_DEMO_GLOBAL as Worker[]);
+        setPublicWorkers([]);
         setPublicWorkersLoading(false);
       }
     );
@@ -459,6 +472,14 @@ const App: React.FC = () => {
     return (
       <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
         <MundoLanding />
+      </Suspense>
+    );
+  }
+
+  if (path === "/legal/terminos" || path === "/legal/privacidad") {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-[#f4f1e8]" />}>
+        <LegalPage document={path.endsWith("privacidad") ? "privacy" : "terms"} />
       </Suspense>
     );
   }
@@ -633,9 +654,9 @@ const App: React.FC = () => {
             <Dashboard
               jobs={jobs}
               workers={workers}
-              globalWorkers={publicWorkers.length > 0 ? publicWorkers : globalWorkers}
+              globalWorkers={publicWorkers.length > 0 ? publicWorkers : isDemoMode ? globalWorkers : []}
               onRadarClick={handleRadarClick}
-              demoMode={isDemoMode || publicWorkers.length === 0}
+              demoMode={isDemoMode}
               companyStats={companyStats}
               globalStats={globalStats}
               isAdmin={userRole === UserRole.ADMIN}
@@ -695,10 +716,10 @@ const App: React.FC = () => {
           )}
           {currentView === AppView.GLOBAL_SEARCH && (
             <GlobalSearch 
-              globalWorkers={publicWorkers.length > 0 ? publicWorkers : globalWorkers} 
+              globalWorkers={publicWorkers.length > 0 ? publicWorkers : isDemoMode ? globalWorkers : []}
               onInviteWorker={handleInviteWorker}
               isLoading={publicWorkersLoading}
-              isDemo={publicWorkers.length === 0}
+              isDemo={isDemoMode}
               currentCompany={currentCompany}
             />
           )}
