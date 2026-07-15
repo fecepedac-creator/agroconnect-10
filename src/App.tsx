@@ -32,8 +32,6 @@ import {
 } from "lucide-react";
 
 
-import LoginScreen from "./components/LoginScreen";
-
 import { Worker, JobOffer, AppView, UserRole, Company, Lead, AdminConfig, WorkerStatus } from "./types";
 import {
   INITIAL_WORKERS,
@@ -56,6 +54,8 @@ const AIReview = lazy(() => import("./components/AIReview"));
 const WorkerPortal = lazy(() => import("./components/WorkerPortal"));
 const SectorLanding = lazy(() => import("./components/SectorLanding"));
 const MundoLanding = lazy(() => import("./components/MundoLanding"));
+const CompanyAccessScreen = lazy(() => import("./components/CompanyAccessScreen"));
+const AdminAccessScreen = lazy(() => import("./components/AdminAccessScreen"));
 const GlobalSearch = lazy(() => import("./components/GlobalSearch"));
 const CompanySettings = lazy(() => import("./components/CompanySettings"));
 const Broadcasts = lazy(() => import("./components/Broadcasts"));
@@ -410,16 +410,9 @@ const App: React.FC = () => {
 
   if (path.startsWith("/admin") && authReady && roleReady && authUserEmail == null) {
     return (
-      <div className="min-h-screen bg-gray-50 font-sans">
-        <LoginScreen
-          companies={companies}
-          companiesLoading={companiesLoading}
-          companiesError={companiesError}
-          onRetryCompanies={loadCompanies}
-          onSelectRole={handleRoleSelect}
-          onRegisterLead={handleRegisterLead}
-        />
-      </div>
+      <Suspense fallback={<div className="min-h-screen bg-[#080b12]" />}>
+        <AdminAccessScreen onAuthorized={() => handleRoleSelect(UserRole.ADMIN)} />
+      </Suspense>
     );
   }
 
@@ -430,7 +423,8 @@ const App: React.FC = () => {
           <h2 className="text-xl font-extrabold text-gray-900">No autorizado</h2>
           <p className="text-sm text-gray-500 mt-2">No tienes permisos para acceder al panel administrativo.</p>
           <button
-            onClick={() => {
+            onClick={async () => {
+              await signOut(auth);
               window.history.pushState({}, "", "/");
               setPath("/");
             }}
@@ -455,6 +449,17 @@ const App: React.FC = () => {
     return (
       <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
         <SectorLanding sector={path === "/seguridad" ? "security" : "agriculture"} />
+      </Suspense>
+    );
+  }
+
+  if ((path === "/portal-empresas" || path === "/acceso") && userRole === null) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <CompanyAccessScreen
+          onAuthorized={(company) => handleRoleSelect(UserRole.COMPANY, company)}
+          onRegisterLead={handleRegisterLead}
+        />
       </Suspense>
     );
   }
@@ -503,7 +508,6 @@ const App: React.FC = () => {
     );
   }
 
-  // ✅ Evita overlay: si no hay rol seleccionado, SOLO se muestra LoginScreen (landing).
   if (path === "/" && userRole === null) {
     return (
       <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
@@ -514,16 +518,9 @@ const App: React.FC = () => {
 
   if (userRole === null && !path.startsWith("/admin")) {
     return (
-      <div className="min-h-screen bg-gray-50 font-sans">
-        <LoginScreen
-          companies={companies}
-          companiesLoading={companiesLoading}
-          companiesError={companiesError}
-          onRetryCompanies={loadCompanies}
-          onSelectRole={handleRoleSelect}
-          onRegisterLead={handleRegisterLead}
-        />
-      </div>
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <MundoLanding />
+      </Suspense>
     );
   }
 

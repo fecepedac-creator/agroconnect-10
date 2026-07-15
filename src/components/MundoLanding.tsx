@@ -59,7 +59,7 @@ export default function MundoLanding() {
             <a className="transition hover:text-white" href="#como-funciona">Como funciona</a>
             <a className="transition hover:text-white" href="#nosotros">Nosotros</a>
           </nav>
-          <button onClick={() => go("/acceso")} className="min-h-11 rounded-full border border-white/20 px-4 text-sm font-extrabold transition hover:bg-white/10 sm:px-5">
+          <button onClick={() => go("/portal-empresas")} className="min-h-11 rounded-full border border-white/20 px-4 text-sm font-extrabold transition hover:bg-white/10 sm:px-5">
             Acceso empresas
           </button>
         </div>
@@ -88,7 +88,7 @@ export default function MundoLanding() {
                 <a href="#plataformas" className="inline-flex min-h-14 items-center justify-center gap-3 rounded-2xl bg-lime-300 px-7 text-base font-black text-emerald-950 shadow-xl transition hover:-translate-y-0.5 hover:bg-lime-200">
                   Quiero encontrar trabajo <ArrowRight size={20} />
                 </a>
-                <button onClick={() => go("/acceso")} className="inline-flex min-h-14 items-center justify-center gap-3 rounded-2xl border border-white/25 bg-white/5 px-7 text-base font-extrabold text-white backdrop-blur transition hover:bg-white/10">
+                <button onClick={() => go("/portal-empresas")} className="inline-flex min-h-14 items-center justify-center gap-3 rounded-2xl border border-white/25 bg-white/5 px-7 text-base font-extrabold text-white backdrop-blur transition hover:bg-white/10">
                   <Building2 size={20} /> Soy empresa
                 </button>
               </div>
@@ -184,7 +184,7 @@ export default function MundoLanding() {
         <section className="mx-auto max-w-7xl px-5 py-16 lg:px-8 lg:py-24">
           <div className="rounded-[2rem] border border-slate-900/8 bg-white p-7 shadow-[0_20px_70px_rgba(15,23,42,0.08)] sm:p-10 lg:flex lg:items-center lg:justify-between lg:gap-12">
             <div className="max-w-2xl"><p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-700">Confianza que se demuestra</p><h2 className="mt-3 text-3xl font-black tracking-tight">Construyendo nuestra primera red en el Maule.</h2><p className="mt-4 font-medium leading-relaxed text-slate-600">Estamos preparando el piloto junto a trabajadores y empresas de la zona. Publicaremos organizaciones participantes y resultados solo cuando puedan ser verificados.</p></div>
-            <button onClick={() => go("/acceso")} className="mt-7 inline-flex min-h-14 shrink-0 items-center justify-center gap-3 rounded-2xl bg-slate-950 px-7 font-black text-white transition hover:bg-emerald-950 lg:mt-0">Incorporar mi empresa <ArrowRight size={20} /></button>
+            <button onClick={() => go("/portal-empresas")} className="mt-7 inline-flex min-h-14 shrink-0 items-center justify-center gap-3 rounded-2xl bg-slate-950 px-7 font-black text-white transition hover:bg-emerald-950 lg:mt-0">Incorporar mi empresa <ArrowRight size={20} /></button>
           </div>
         </section>
       </main>
