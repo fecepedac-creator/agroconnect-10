@@ -55,6 +55,7 @@ const AdminPanel = lazy(() => import("./components/AdminPanel"));
 const AIReview = lazy(() => import("./components/AIReview"));
 const WorkerPortal = lazy(() => import("./components/WorkerPortal"));
 const SectorLanding = lazy(() => import("./components/SectorLanding"));
+const MundoLanding = lazy(() => import("./components/MundoLanding"));
 const GlobalSearch = lazy(() => import("./components/GlobalSearch"));
 const CompanySettings = lazy(() => import("./components/CompanySettings"));
 const Broadcasts = lazy(() => import("./components/Broadcasts"));
@@ -503,6 +504,14 @@ const App: React.FC = () => {
   }
 
   // ✅ Evita overlay: si no hay rol seleccionado, SOLO se muestra LoginScreen (landing).
+  if (path === "/" && userRole === null) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <MundoLanding />
+      </Suspense>
+    );
+  }
+
   if (userRole === null && !path.startsWith("/admin")) {
     return (
       <div className="min-h-screen bg-gray-50 font-sans">

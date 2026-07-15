@@ -87,12 +87,12 @@ export default function LoginScreen({
           </div>
 
           <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 leading-tight">
-            Agro<span className="text-emerald-600">Connect</span>
+            Mundo<span className="text-emerald-600">Connect</span>
           </h1>
           <div className="text-xs font-bold tracking-[0.35em] text-slate-500 mt-1">CHILE</div>
 
           <p className="text-sm text-slate-600 mt-4 leading-relaxed">
-            La plataforma inteligente que conecta necesidades agrícolas con talento local en tiempo real.
+            Una sola plataforma para conectar empresas con personas disponibles en distintos sectores.
           </p>
         </div>
       </div>
@@ -156,7 +156,7 @@ export default function LoginScreen({
       email: leadEmail.trim(),
       phone: leadPhone.trim() || undefined,
       region: leadRegion.trim() || undefined,
-      notes: (leadNotes || "Solicito incorporación de mi empresa a AgroConnect.").trim(),
+      notes: (leadNotes || "Solicito incorporación de mi empresa a MundoConnect.").trim(),
     });
 
     // Reset + feedback simple

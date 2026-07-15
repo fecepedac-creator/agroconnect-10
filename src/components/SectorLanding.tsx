@@ -108,7 +108,7 @@ export default function SectorLanding({sector}: Props) {
                   {experience.workerCta} <ArrowRight size={20} />
                 </button>
                 <button
-                  onClick={() => go("/")}
+                  onClick={() => go("/acceso")}
                   className="inline-flex min-h-14 items-center justify-center gap-3 rounded-2xl border border-white/25 bg-white/5 px-7 text-base font-extrabold text-white backdrop-blur transition hover:bg-white/10"
                 >
                   <Building2 size={20} /> {experience.companyCta}
