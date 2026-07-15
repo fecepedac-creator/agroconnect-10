@@ -6,6 +6,7 @@ import {
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { defineSecret, defineString } from "firebase-functions/params";
 import nodemailer from "nodemailer";
+import {createHash} from "node:crypto";
 import {isVerifiedGoogleIdentity} from "./authPolicy";
 import {
   canRespondToMatchState,
@@ -22,11 +23,16 @@ import {
 } from "./accessPolicy";
 
 import * as admin from "firebase-admin";
+import {
+  FieldValue,
+  Timestamp,
+  getFirestore,
+  type DocumentReference,
+} from "firebase-admin/firestore";
 
 admin.initializeApp();
 
-const db = admin.firestore();
-const FieldValue = admin.firestore.FieldValue;
+const db = getFirestore();
 
 // ===== Email (Gmail SMTP) =====
 const GMAIL_APP_PASSWORD = defineSecret("GMAIL_APP_PASSWORD");
@@ -510,6 +516,24 @@ async function hasCompanyAccess(uid: string, companyId: string): Promise<boolean
   return membership.exists && isActiveCompanyMembership(membership.data());
 }
 
+async function assertSuperadmin(request: any) {
+  const user = await assertAuthenticated(request);
+  if (!await hasCurrentSuperadminClaims(user.uid)) {
+    throw new HttpsError("permission-denied", "Acceso exclusivo de SuperAdmin.");
+  }
+  return user;
+}
+
+async function deleteDocumentRefs(
+  refs: DocumentReference[]
+): Promise<void> {
+  for (let index = 0; index < refs.length; index += 400) {
+    const batch = db.batch();
+    refs.slice(index, index + 400).forEach((ref) => batch.delete(ref));
+    await batch.commit();
+  }
+}
+
 async function hasAnyCompanyAccess(uid: string): Promise<boolean> {
   const memberships = await db.collectionGroup("company_members")
     .where("uid", "==", uid)
@@ -556,7 +580,8 @@ export const applyToJob = onCall(async (request) => {
     }
     if (
       !job.exists ||
-      (job.data()?.isActive !== true && job.data()?.jobStatus !== "active")
+      (job.data()?.isActive !== true && job.data()?.jobStatus !== "active") ||
+      job.data()?.publishPublic !== true
     ) {
       throw new HttpsError("failed-precondition", "La oferta ya no está disponible.");
     }
@@ -594,7 +619,7 @@ export const applyToJob = onCall(async (request) => {
       companyDecision: "pending",
       createdAt: existingMatch.data()?.createdAt || FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
-      expiresAt: admin.firestore.Timestamp.fromMillis(
+      expiresAt: Timestamp.fromMillis(
         Date.now() + 30 * 24 * 60 * 60 * 1000
       ),
       lastActionBy: "worker",
@@ -666,7 +691,7 @@ export const inviteWorkerToJob = onCall(async (request) => {
       matchedAt: state === "matched"
         ? FieldValue.serverTimestamp()
         : existing.data()?.matchedAt || null,
-      expiresAt: admin.firestore.Timestamp.fromMillis(
+      expiresAt: Timestamp.fromMillis(
         Date.now() + 30 * 24 * 60 * 60 * 1000
       ),
       lastActionBy: "company",
@@ -690,7 +715,7 @@ export const inviteWorkerToJob = onCall(async (request) => {
           },
           reason: "mutual_match",
           grantedAt: FieldValue.serverTimestamp(),
-          expiresAt: admin.firestore.Timestamp.fromMillis(
+          expiresAt: Timestamp.fromMillis(
             Date.now() + 30 * 24 * 60 * 60 * 1000
           ),
           schemaVersion: 1,
@@ -769,7 +794,7 @@ export const respondToMatch = onCall(async (request) => {
           },
           reason: "mutual_match",
           grantedAt: FieldValue.serverTimestamp(),
-          expiresAt: admin.firestore.Timestamp.fromMillis(
+          expiresAt: Timestamp.fromMillis(
             Date.now() + 30 * 24 * 60 * 60 * 1000
           ),
           schemaVersion: 1,
@@ -810,6 +835,26 @@ export const markMatchHired = onCall(async (request) => {
       lastActionBy: "company",
       lastActionByUid: actor.uid,
     });
+    const applicationUpdate = {
+      status: "hired",
+      hiredAt: FieldValue.serverTimestamp(),
+      decisionAt: FieldValue.serverTimestamp(),
+      decisionBy: actor.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    transaction.set(
+      db.collection("workers").doc(initialData.workerId)
+        .collection("applications").doc(`${initialData.companyId}_${initialData.jobId}`),
+      applicationUpdate,
+      {merge: true}
+    );
+    transaction.set(
+      db.collection("companies").doc(initialData.companyId)
+        .collection("jobs").doc(initialData.jobId)
+        .collection("applications").doc(initialData.workerId),
+      applicationUpdate,
+      {merge: true}
+    );
   });
   return {ok: true, matchId, state: "hired"};
 });
@@ -1026,14 +1071,14 @@ export const submitWorkerCredentialEvidence = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Indica el nombre de la certificación.");
   }
 
-  let expiresAt: admin.firestore.Timestamp | null = null;
+  let expiresAt: Timestamp | null = null;
   const expiresAtInput = String(request.data?.expiresAt || "").trim();
   if (expiresAtInput) {
     const parsed = new Date(`${expiresAtInput}T12:00:00Z`);
     if (Number.isNaN(parsed.getTime())) {
       throw new HttpsError("invalid-argument", "La fecha de vencimiento no es válida.");
     }
-    expiresAt = admin.firestore.Timestamp.fromDate(parsed);
+    expiresAt = Timestamp.fromDate(parsed);
   }
 
   const credentialRef = db.collection("worker_credentials").doc();
@@ -1282,6 +1327,167 @@ export const submitSafetyReport = onCall(async (request) => {
     updatedAt: FieldValue.serverTimestamp(),
   });
   return {ok: true, reportId: report.id};
+});
+
+export const reviewSafetyReport = onCall(async (request) => {
+  const adminUser = await assertSuperadmin(request);
+  const reportId = String(request.data?.reportId || "").trim();
+  const decision = String(request.data?.decision || "").trim();
+  const resolutionNote = String(request.data?.resolutionNote || "").trim();
+  const allowedDecisions = ["resolve", "dismiss", "suspend_job", "suspend_company"];
+
+  if (!reportId || !allowedDecisions.includes(decision) || resolutionNote.length < 5 || resolutionNote.length > 1000) {
+    throw new HttpsError("invalid-argument", "Indica una resoluciÃ³n vÃ¡lida.");
+  }
+
+  const reportRef = db.collection("safety_reports").doc(reportId);
+  await db.runTransaction(async (transaction) => {
+    const report = await transaction.get(reportRef);
+    if (!report.exists) {
+      throw new HttpsError("not-found", "La denuncia no existe.");
+    }
+    const reportData = report.data() || {};
+    if (reportData.status !== "open") {
+      throw new HttpsError("failed-precondition", "La denuncia ya fue procesada.");
+    }
+
+    if (decision === "suspend_job") {
+      const jobRef = db.collection("companies").doc(String(reportData.companyId))
+        .collection("jobs").doc(String(reportData.jobId));
+      transaction.set(jobRef, {
+        isActive: false,
+        isDraft: false,
+        jobStatus: "closed",
+        publishPublic: false,
+        suspendedAt: FieldValue.serverTimestamp(),
+        suspendedBy: adminUser.uid,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+      transaction.set(db.collection("publicJobs").doc(`${reportData.companyId}_${reportData.jobId}`), {
+        isActive: false,
+        jobStatus: "closed",
+        publishPublic: false,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+    }
+
+    if (decision === "suspend_company") {
+      transaction.set(db.collection("companies").doc(String(reportData.companyId)), {
+        status: "suspended",
+        suspendedAt: FieldValue.serverTimestamp(),
+        suspendedBy: adminUser.uid,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+    }
+
+    transaction.update(reportRef, {
+      status: decision === "dismiss" ? "dismissed" : "resolved",
+      decision,
+      resolutionNote,
+      resolvedAt: FieldValue.serverTimestamp(),
+      resolvedBy: adminUser.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    transaction.set(db.collection("admin_audit").doc(), {
+      action: "safety_report_reviewed",
+      actorUid: adminUser.uid,
+      targetId: reportId,
+      decision,
+      companyId: String(reportData.companyId || ""),
+      jobId: String(reportData.jobId || ""),
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  return {ok: true, status: decision === "dismiss" ? "dismissed" : "resolved"};
+});
+
+export const reviewDataDeletionRequest = onCall(async (request) => {
+  const adminUser = await assertSuperadmin(request);
+  const uid = String(request.data?.uid || "").trim();
+  const decision = String(request.data?.decision || "").trim();
+  const resolutionNote = String(request.data?.resolutionNote || "").trim();
+  if (!uid || !["complete", "reject"].includes(decision) || resolutionNote.length < 5 || resolutionNote.length > 1000) {
+    throw new HttpsError("invalid-argument", "Indica una resoluciÃ³n vÃ¡lida.");
+  }
+
+  const deletionRef = db.collection("data_deletion_requests").doc(uid);
+  const deletionRequest = await deletionRef.get();
+  if (!deletionRequest.exists || deletionRequest.data()?.status !== "pending") {
+    throw new HttpsError("failed-precondition", "La solicitud no estÃ¡ pendiente.");
+  }
+
+  if (decision === "reject") {
+    await deletionRef.update({
+      status: "rejected",
+      resolutionNote,
+      resolvedAt: FieldValue.serverTimestamp(),
+      resolvedBy: adminUser.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    await db.collection("admin_audit").add({
+      action: "data_deletion_rejected",
+      actorUid: adminUser.uid,
+      targetId: uid,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    return {ok: true, status: "rejected"};
+  }
+
+  const anonymousSubject = createHash("sha256").update(uid).digest("hex").slice(0, 20);
+  const [usernames, credentials, applications, grants, authoredReviews, workerReviews, workerMatches] = await Promise.all([
+    db.collection("worker_usernames").where("uid", "==", uid).get(),
+    db.collection("worker_credentials").where("workerId", "==", uid).get(),
+    db.collectionGroup("applications").where("workerId", "==", uid).get(),
+    db.collectionGroup("contact_grants").where("workerId", "==", uid).get(),
+    db.collection("match_reviews").where("authorUid", "==", uid).get(),
+    db.collection("match_reviews").where("workerId", "==", uid).get(),
+    db.collection("matches").where("workerId", "==", uid).get(),
+  ]);
+
+  const refs = new Map<string, DocumentReference>();
+  [usernames, credentials, applications, grants, authoredReviews, workerReviews].forEach((snapshot) => {
+    snapshot.docs.forEach((document) => refs.set(document.ref.path, document.ref));
+  });
+  await deleteDocumentRefs([...refs.values()]);
+
+  for (let index = 0; index < workerMatches.docs.length; index += 400) {
+    const batch = db.batch();
+    workerMatches.docs.slice(index, index + 400).forEach((match) => {
+      batch.update(match.ref, {
+        workerId: `deleted_${anonymousSubject}`,
+        workerName: "Persona eliminada",
+        workerDeleted: true,
+        workerEmail: FieldValue.delete(),
+        workerPhone: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+    await batch.commit();
+  }
+
+  await Promise.all([
+    db.recursiveDelete(db.collection("workers").doc(uid)),
+    db.collection("users").doc(uid).delete(),
+    db.collection("discoverableWorkers").doc(uid).delete(),
+    db.collection("publicWorkers").doc(uid).delete(),
+  ]);
+
+  try {
+    await admin.auth().deleteUser(uid);
+  } catch (error: any) {
+    if (error?.code !== "auth/user-not-found") throw error;
+  }
+  await db.collection("privacy_audit").add({
+    action: "data_deletion_completed",
+    anonymousSubject,
+    actorUid: adminUser.uid,
+    resolutionNote,
+    completedAt: FieldValue.serverTimestamp(),
+  });
+  await deletionRef.delete();
+
+  return {ok: true, status: "completed"};
 });
 
 /**
@@ -1630,6 +1836,7 @@ async function upsertPublicJob(companyId: string, jobId: string, data: any) {
     otherBenefits: data?.otherBenefits ?? null,
     jobStatus: data?.jobStatus ?? "active",
     isActive: data?.isActive ?? true,
+    publishPublic: true,
     publishedAt: data?.publishedAt ?? null,
     updatedAt: FieldValue.serverTimestamp(),
   };
@@ -1643,6 +1850,7 @@ async function closePublicJob(companyId: string, jobId: string) {
     {
       jobStatus: "closed",
       isActive: false,
+      publishPublic: false,
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true }
@@ -1782,6 +1990,30 @@ export const onApplicationUpdated = onDocumentUpdated(
     }
   }
 );
+
+export const onMatchCreated = onDocumentCreated("matches/{matchId}", async (event) => {
+  const data = event.data?.data() as any;
+  if (!data) return;
+  const companyId = String(data.companyId || "");
+  const createdAt = data?.createdAt?.toDate?.() || event.data?.createTime?.toDate?.() || new Date();
+  const ym = ymFromDate(createdAt);
+  await incGlobal({matchesTotal: 1});
+  await incMonthly(ym, {matchesCreated: 1});
+  if (companyId) await incCompany(companyId, {matchesTotal: 1});
+});
+
+export const onMatchUpdated = onDocumentUpdated("matches/{matchId}", async (event) => {
+  const before = event.data?.before.data() as any;
+  const after = event.data?.after.data() as any;
+  if (!before || !after || before.state === after.state) return;
+  const companyId = String(after.companyId || "");
+  const ym = ymFromDate(new Date());
+  if (before.state !== "matched" && after.state === "matched") {
+    await incGlobal({matchesConfirmed: 1});
+    await incMonthly(ym, {matchesConfirmed: 1});
+    if (companyId) await incCompany(companyId, {matchesConfirmed: 1});
+  }
+});
 
 /**
  * =========================
@@ -2299,7 +2531,7 @@ export const sendEmailFromOutbox = onDocumentCreated(
  */
 export const commsOutboxWatchdog = onSchedule("every 10 minutes", async () => {
   const cutoffMs = Date.now() - 15 * 60 * 1000;
-  const cutoff = admin.firestore.Timestamp.fromMillis(cutoffMs);
+  const cutoff = Timestamp.fromMillis(cutoffMs);
   const snap = await db
     .collection("comms_outbox")
     .where("status", "==", "sending")

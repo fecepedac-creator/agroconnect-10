@@ -177,6 +177,9 @@ async function seedBaseData() {
     await setDoc(doc(db, 'companies', COMPANY_ID, 'jobs', JOB_ID), {
       companyId: COMPANY_ID,
       title: 'Operario de bodega',
+      location: 'Talca',
+      workersNeeded: 5,
+      publishPublic: true,
       isDraft: false,
       isActive: true,
       jobStatus: 'active',
@@ -193,6 +196,9 @@ async function seedBaseData() {
     await setDoc(doc(db, 'companies', 'company_overdue', 'jobs', 'job_active'), {
       companyId: 'company_overdue',
       title: 'Oferta publicada antes de la morosidad',
+      location: 'Talca',
+      workersNeeded: 5,
+      publishPublic: true,
       isDraft: false,
       isActive: true,
       jobStatus: 'active',
@@ -578,6 +584,9 @@ async function main() {
     const db = companyAdminDb();
     await assertSucceeds(setDoc(doc(db, 'companies', COMPANY_ID, 'jobs', 'job_new'), {
       title: 'Oferta permitida',
+      location: 'Talca',
+      workersNeeded: 5,
+      publishPublic: true,
       isActive: true,
       jobStatus: 'active',
     }));

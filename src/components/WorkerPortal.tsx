@@ -1,11 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import {
   collection,
-  collectionGroup,
   doc,
-  getDoc,
   onSnapshot,
   orderBy,
   query,
@@ -112,38 +110,20 @@ const useAuthUser = () => {
   return { authUser, loading };
 };
 
-const useJobs = (mode: "public" | "private") => {
+const useJobs = () => {
   const [jobs, setJobs] = useState<JobListing[]>([]);
-  const companyCache = useRef(new Map<string, string>());
 
   useEffect(() => {
-    const q =
-      mode === "public"
-        ? query(collection(db, "publicJobs"), orderBy("updatedAt", "desc"))
-        : query(collectionGroup(db, "jobs"), orderBy("createdAt", "desc"));
+    const q = query(collection(db, "publicJobs"), orderBy("updatedAt", "desc"));
     const unsub = onSnapshot(q, async (snap) => {
       const entries = await Promise.all(
         snap.docs.map(async (docSnap) => {
           const data = docSnap.data() as any;
-          const companyId =
-            mode === "public" ? data.companyId ?? "" : docSnap.ref.parent.parent?.id ?? data.companyId ?? "";
-          let companyName = data.companyName ?? "";
-
-          if (mode === "private" && !companyName && companyId) {
-            const cached = companyCache.current.get(companyId);
-            if (cached) {
-              companyName = cached;
-            } else {
-              const companySnap = await getDoc(doc(db, "companies", companyId));
-              if (companySnap.exists()) {
-                companyName = (companySnap.data() as any).name ?? "";
-                if (companyName) companyCache.current.set(companyId, companyName);
-              }
-            }
-          }
+          const companyId = data.companyId ?? "";
+          const companyName = data.companyName ?? "";
 
           return {
-            id: docSnap.id,
+            id: String(data.jobId || docSnap.id),
             title: data.title ?? "",
             description: data.description ?? "",
             workersNeeded: data.workersNeeded ?? 0,
@@ -152,6 +132,7 @@ const useJobs = (mode: "public" | "private") => {
             location: data.location ?? "",
             coordinates: data.coordinates ?? { lat: 0, lng: 0 },
             isActive: data.isActive ?? false,
+            publishPublic: data.publishPublic === true,
             jobStatus: data.jobStatus ?? (data.isActive ? "active" : "future"),
             sector: data.sector ?? "agriculture",
             category: data.category ?? "Otros",
@@ -182,7 +163,7 @@ const useJobs = (mode: "public" | "private") => {
     });
 
     return () => unsub();
-  }, [mode]);
+  }, []);
 
   return jobs;
 };
@@ -591,7 +572,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
   const experience = SECTOR_EXPERIENCES[sector];
   const go = useCallback((to: string) => navigate(`${to}${sectorQuery(sector)}`), [navigate, sector]);
   const { authUser, loading } = useAuthUser();
-  const jobs = useJobs(authUser ? "private" : "public");
+  const jobs = useJobs();
   const applications = useWorkerApplications(authUser?.uid);
   const matches = useWorkerMatches(authUser?.uid);
   const [workerProfile, setWorkerProfile] = useState<WorkerProfile | null>(null);
@@ -670,14 +651,17 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
   }, [authUser, matches]);
 
   useEffect(() => {
-    if (!authUser && path.startsWith("/worker")) {
+    if (!loading && !authUser && path.startsWith("/worker")) {
       go("/trabajos");
     }
-  }, [authUser, go, path]);
+  }, [authUser, go, loading, path]);
 
   const visibleJobs = useMemo(
     () => jobs.filter((job) => (
-      (job.jobStatus ?? "active") !== "closed" && (job.sector ?? "agriculture") === sector
+      job.publishPublic === true &&
+      job.isActive === true &&
+      (job.jobStatus ?? "active") !== "closed" &&
+      (job.sector ?? "agriculture") === sector
     )),
     [jobs, sector]
   );

@@ -13,7 +13,7 @@
         "test:rules": "firebase emulators:exec --only firestore \"node tests/firestore.rules.test.mjs\"",
         "test:rules:local": "node tests/firestore.rules.test.mjs",
         "test:e2e": "playwright test",
-        "test:e2e:emulated": "firebase emulators:exec --project demo-mundoconnect --only auth,firestore \"npm run test:e2e\"",
+        "test:e2e:emulated": "npm --prefix functions run build && firebase emulators:exec --project demo-mundoconnect --only auth,firestore,functions \"npm run test:e2e\"",
         "check:firebase-envs": "node scripts/validate-firebase-environments.mjs",
         "migrate:platform-v1": "node scripts/migrate-platform-v1.mjs"
     },

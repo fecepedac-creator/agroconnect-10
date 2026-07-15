@@ -220,21 +220,29 @@ export default function PublishOffer({
   const publishOffer = async () => {
     setError(null);
     setSavedOk(false);
-
-    if (!jobId) {
-      await saveDraft();
+    if (!canSave) {
+      setError("Completa al menos: Puesto de trabajo, Lugar y Cupos.");
+      return;
     }
-    if (!jobRef) return;
 
     setSaving(true);
     try {
-      await updateDoc(jobRef, {
+      const targetRef = jobId
+        ? doc(db, "companies", companyId, "jobs", jobId)
+        : doc(collection(db, "companies", companyId, "jobs"));
+      await setDoc(targetRef, {
+        ...buildPayload(),
+        companyId,
         isDraft: false,
         isActive: true,
         jobStatus: "active",
+        publishPublic: true,
         publishedAt: new Date().toISOString(),
         updatedAt: serverTimestamp(),
-      } as any);
+        ...(!jobId ? {createdAt: serverTimestamp()} : {}),
+      } as any, {merge: true});
+      if (!jobId) setJobId(targetRef.id);
+      setPublishPublic(true);
       setSavedOk(true);
     } catch (e: any) {
       setError(e?.message || "No se pudo publicar la oferta.");

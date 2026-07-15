@@ -43,7 +43,7 @@ import {
 } from "./constants";
 import { getCompanies } from "./services/companies";
 import {getExpansionSector} from "./expansionSectors";
-type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "SETTINGS";
+type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "TRUST" | "SETTINGS";
 
 const Dashboard = lazy(() => import("./components/Dashboard"));
 const PublishOffer = lazy(() => import("./components/PublishOffer"));

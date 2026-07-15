@@ -64,7 +64,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Setup Java for Firestore emulator
@@ -76,6 +76,7 @@ jobs:
       - name: Install dependencies and Chromium
         run: |
           npm ci
+          npm --prefix functions ci
           npx playwright install --with-deps chromium
 
       - name: Run role and sector E2E
