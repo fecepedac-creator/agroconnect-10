@@ -5,6 +5,7 @@ export type ExpansionSectorSlug =
   | "forestal"
   | "retail"
   | "logistica"
+  | "aseo"
   | "servicios"
   | "turismo"
   | "industria";
@@ -16,6 +17,7 @@ export type ExpansionSectorIconName =
   | "forestry"
   | "retail"
   | "logistics"
+  | "cleaning"
   | "services"
   | "tourism"
   | "industry";
@@ -103,14 +105,30 @@ export const EXPANSION_SECTORS: ExpansionSector[] = [
     gradient: "linear-gradient(135deg, #020617 0%, #1a2e05 58%, #365314 100%)",
   },
   {
+    slug: "aseo",
+    brand: "AseoConnect",
+    shortName: "Aseo institucional",
+    icon: "cleaning",
+    eyebrow: "Limpieza profesional para empresas",
+    headline: "Personal confiable para espacios que deben funcionar todos los días.",
+    description: "Conecta empresas de aseo e instituciones con auxiliares disponibles para instalaciones, turnos y reemplazos. No incluye aseo domiciliario.",
+    roles: ["Aseo de oficinas", "Aseo industrial", "Aseo hospitalario", "Hoteles e instalaciones"],
+    companyFocus: "Instalación, superficie, turno, productos, uniforme, riesgos y protocolos específicos.",
+    credentialNote: "Los protocolos hospitalarios, industriales y de manipulación de químicos deberán poder verificarse.",
+    accent: "#f0abfc",
+    accentText: "#4a044e",
+    glow: "rgba(240,171,252,0.2)",
+    gradient: "linear-gradient(135deg, #020617 0%, #4a044e 58%, #701a75 100%)",
+  },
+  {
     slug: "servicios",
     brand: "ServiciosConnect",
     shortName: "Servicios",
     icon: "services",
     eyebrow: "Apoyo que hace funcionar cada lugar",
     headline: "Equipos de apoyo confiables, disponibles en tu zona.",
-    description: "Para empresas de aseo, mantención, áreas verdes, conserjería y servicios operativos.",
-    roles: ["Aseo", "Mantención", "Áreas verdes", "Apoyo operativo"],
+    description: "Para empresas de mantención, áreas verdes, conserjería y otros servicios operativos.",
+    roles: ["Mantención", "Áreas verdes", "Conserjería", "Apoyo operativo"],
     companyFocus: "Lugar, funciones, insumos, jornada y protocolos de seguridad.",
     credentialNote: "Las evaluaciones de cumplimiento y asistencia serán especialmente relevantes.",
     accent: "#2dd4bf",

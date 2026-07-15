@@ -1,4 +1,5 @@
 import {
+  BrushCleaning,
   Construction,
   Factory,
   HeartPulse,
@@ -19,6 +20,7 @@ const icons = {
   forestry: Trees,
   retail: ShoppingBag,
   logistics: Warehouse,
+  cleaning: BrushCleaning,
   services: Sparkles,
   tourism: UtensilsCrossed,
   industry: Factory,
