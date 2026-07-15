@@ -455,6 +455,14 @@ const App: React.FC = () => {
     );
   }
 
+  if (path === "/") {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+        <MundoLanding />
+      </Suspense>
+    );
+  }
+
   const expansionSector = getExpansionSector(path);
   if (expansionSector) {
     return (
@@ -516,14 +524,6 @@ const App: React.FC = () => {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="text-sm text-gray-500">Cargando acceso...</div>
       </div>
-    );
-  }
-
-  if (path === "/" && userRole === null) {
-    return (
-      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
-        <MundoLanding />
-      </Suspense>
     );
   }
 
