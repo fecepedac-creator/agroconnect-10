@@ -3,6 +3,8 @@ import {collection, onSnapshot, query, where} from "firebase/firestore";
 import {httpsCallable} from "firebase/functions";
 import {Award, CheckCircle2, Clock3, ExternalLink, XCircle} from "lucide-react";
 import {db, functions} from "../firebase";
+import type {EmploymentSector} from "../sectorExperience";
+import {getSectorTheme} from "../sectorTheme";
 
 type Credential = {
   id: string;
@@ -29,7 +31,8 @@ const statusPresentation: Record<string, {label: string; className: string}> = {
 
 const isSafeLink = (value?: string | null) => Boolean(value && /^https:\/\//i.test(value));
 
-export default function WorkerCredentialsPanel({uid}: {uid: string}) {
+export default function WorkerCredentialsPanel({uid, sector = "agriculture"}: {uid: string; sector?: EmploymentSector}) {
+  const theme = getSectorTheme(sector);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [title, setTitle] = useState("");
   const [credentialType, setCredentialType] = useState("training");
@@ -76,7 +79,7 @@ export default function WorkerCredentialsPanel({uid}: {uid: string}) {
   return (
     <section className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
       <div className="flex items-start gap-3">
-        <div className="rounded-2xl bg-emerald-100 p-3 text-emerald-700"><Award size={24} /></div>
+        <div className={`rounded-2xl p-3 ${theme.buttonMuted}`}><Award size={24} /></div>
         <div>
           <h3 className="text-lg font-extrabold text-gray-900">Cursos y certificaciones</h3>
           <p className="mt-1 text-sm leading-6 text-gray-600">
@@ -106,7 +109,7 @@ export default function WorkerCredentialsPanel({uid}: {uid: string}) {
           Numero, enlace o referencia del respaldo (opcional)
           <input value={evidenceReference} onChange={(event) => setEvidenceReference(event.target.value)} maxLength={300} className="min-h-12 rounded-xl border border-gray-300 bg-white px-4 text-base font-normal" placeholder="Ejemplo: codigo del certificado o enlace https://..." />
         </label>
-        <button disabled={submitting} className="min-h-12 rounded-xl bg-emerald-700 px-5 text-base font-extrabold text-white disabled:opacity-50">
+        <button disabled={submitting} className={`min-h-12 rounded-xl px-5 text-base font-extrabold disabled:opacity-50 ${theme.button}`}>
           {submitting ? "Agregando..." : "Agregar antecedente"}
         </button>
       </form>
@@ -131,7 +134,7 @@ export default function WorkerCredentialsPanel({uid}: {uid: string}) {
               {credential.evidenceReference && (
                 <div className="mt-3 break-all text-sm text-gray-600">
                   {isSafeLink(credential.evidenceReference) ? (
-                    <a href={credential.evidenceReference} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center gap-2 font-bold text-emerald-700 underline">
+                    <a href={credential.evidenceReference} target="_blank" rel="noreferrer" className={`inline-flex min-h-11 items-center gap-2 font-bold underline ${theme.accentText}`}>
                       Ver respaldo <ExternalLink size={15} />
                     </a>
                   ) : `Referencia: ${credential.evidenceReference}`}

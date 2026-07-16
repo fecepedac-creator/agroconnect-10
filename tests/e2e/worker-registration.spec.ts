@@ -21,11 +21,19 @@ async function registerWorker(page: Page, sector: "agriculture" | "security") {
   await page.getByLabel("Teléfono").fill(sector === "agriculture" ? "11111111" : "22222222");
   await page.getByLabel("Acepto términos y privacidad").check();
   await page.getByLabel("Autorizo matching laboral").check();
-  await page.getByRole("button", {name: "Crear mi cuenta"}).click();
+  const createAccountButton = page.getByRole("button", {name: "Crear mi cuenta"});
+  await expect(createAccountButton).toHaveClass(sector === "agriculture" ? /bg-emerald-700/ : /bg-blue-950/);
+  await createAccountButton.click();
 
   await expect(page).toHaveURL(new RegExp(`/worker\\?sector=${sector}`));
   await expect(page.getByText(new RegExp(`Hola, Trabajador ${trade}`))).toBeVisible();
   await expect(page.getByText("Ofertas disponibles")).toBeVisible();
+  await expect(page.locator(`[data-sector="${sector}"]`)).toBeVisible();
+
+  await page.getByRole("button", {name: "Mi perfil"}).click();
+  const saveProfileButton = page.getByRole("button", {name: "Guardar mi perfil"});
+  await expect(saveProfileButton).toHaveClass(sector === "agriculture" ? /bg-emerald-700/ : /bg-blue-950/);
+  await page.getByRole("button", {name: "Inicio", exact: true}).click();
 
   await page.getByRole("button", {name: /piloto/}).click();
   await page.getByRole("button", {name: "Reportar esta oferta"}).click();
