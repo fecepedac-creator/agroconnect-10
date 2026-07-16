@@ -1,569 +1,65 @@
-
-import React, { useState, useEffect } from 'react';
-import { JobOffer, Company } from '../types';
-import { generateJobDescription } from '../services/geminiService';
-import { getCurrentPosition } from '../services/geolocationService';
-import { applicantStore, Applicant } from '../services/applicantStore';
-import { db } from '../firebase';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp } from 'firebase/firestore';
-// Added ThumbsUp to imports
-import { 
-  Plus, 
-  Wand2, 
-  MapPin, 
-  AlertOctagon, 
-  Users as UsersIcon, 
-  X, 
-  Briefcase, 
-  Bus, 
-  Utensils, 
-  Coins, 
-  ShieldCheck, 
-  Loader2, 
-  Trash2, 
-  Navigation, 
-  Globe,
-  Sparkles,
-  CheckCircle,
-  ThumbsUp
-} from 'lucide-react';
+import React, { useState } from "react";
+import { deleteDoc, doc } from "firebase/firestore";
+import { Briefcase, Bus, MapPin, Plus, ShieldCheck, Trash2, Users } from "lucide-react";
+import { db } from "../firebase";
+import { Company, JobOffer } from "../types";
 
 interface JobsProps {
   jobs: JobOffer[];
-  setJobs: React.Dispatch<React.SetStateAction<JobOffer[]>>;
   currentCompany: Company | null;
+  onCreateOffer: () => void;
+  onViewCandidates: () => void;
 }
 
-const CATEGORIES_BY_SECTOR = {
-  agriculture: ['Cosecha', 'Packing', 'Poda', 'Maquinaria', 'Otros'],
-  security: ['Guardia de seguridad', 'Control de acceso', 'Rondín', 'Supervisor', 'Otros'],
-};
-const PAYMENT_TYPES = ['Al Día', 'Semanal', 'Quincenal', 'Por Kilo'];
+const Jobs: React.FC<JobsProps> = ({ jobs, currentCompany, onCreateOffer, onViewCandidates }) => {
+  const [activeTab, setActiveTab] = useState<"future" | "active" | "closed">("active");
+  const [notice, setNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const isSuspended = currentCompany?.status === "overdue" || currentCompany?.status === "suspended";
 
-const Jobs: React.FC<JobsProps> = ({ jobs, setJobs, currentCompany }) => {
-  const [showForm, setShowForm] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isGettingLocation, setIsGettingLocation] = useState(false);
-  const [activeTab, setActiveTab] = useState<'future' | 'active' | 'closed'>('active');
-  const [showMapPicker, setShowMapPicker] = useState(false);
-  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
-
-  const [newJob, setNewJob] = useState<Partial<JobOffer> & { lat?: number; lng?: number }>({
-    title: '',
-    description: '',
-    workersNeeded: 10,
-    startDate: new Date().toISOString().split('T')[0],
-    location: '',
-    sector: 'agriculture',
-    category: 'Cosecha',
-    paymentType: 'Al Día',
-    benefits: { transport: false, lunch: false },
-    transportMode: 'pending',
-    transportInfo: '',
-    pickupPoints: '',
-    departureTime: '',
-    returnTime: '',
-    transportCost: 0,
-    shiftType: 'day',
-    shiftPattern: '4x4',
-    requiresOs10: true,
-    facilityType: '',
-    otherBenefits: '',
-    publishPublic: false,
-    lat: -34.985, 
-    lng: -71.239
-  });
-
-  // TODO: Temporary backward compatibility during migration - remove after status migration is complete
-  const isSuspended = currentCompany?.status === 'overdue';
-
-  // --- Firestore sync: companies/{companyId}/jobs ---
-  useEffect(() => {
-    if (!currentCompany?.id) return;
-
-    const q = query(
-      collection(db, 'companies', currentCompany.id, 'jobs'),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const list = snap.docs.map((d) => {
-          const data: any = d.data();
-          return {
-            id: d.id,
-            title: data.title ?? '',
-            description: data.description ?? '',
-            workersNeeded: data.workersNeeded ?? 1,
-            workersFilled: data.workersFilled ?? 0,
-            startDate: data.startDate ?? '',
-            location: data.location ?? '',
-            coordinates: data.coordinates ?? data.coordinates ?? { lat: -33.4489, lng: -70.6693 },
-            isActive: data.isActive ?? false,
-            jobStatus: data.jobStatus ?? (data.isActive ? 'active' : 'future'),
-            qrCodeUrl: data.qrCodeUrl ?? '',
-            sector: data.sector ?? 'agriculture',
-            category: data.category ?? 'Otros',
-            paymentType: data.paymentType ?? 'Al Día',
-            benefits: data.benefits ?? { transport: false, lunch: false },
-            transportMode: data.transportMode ?? 'pending',
-            transportInfo: data.transportInfo ?? '',
-            pickupPoints: data.pickupPoints ?? '',
-            departureTime: data.departureTime ?? '',
-            returnTime: data.returnTime ?? '',
-            transportCost: data.transportCost ?? 0,
-            shiftType: data.shiftType ?? 'day',
-            shiftPattern: data.shiftPattern ?? '',
-            requiresOs10: data.requiresOs10 ?? false,
-            facilityType: data.facilityType ?? '',
-            otherBenefits: data.otherBenefits ?? '',
-          } as JobOffer;
-        });
-        setJobs(list);
-      },
-      (err) => {
-        console.error(err);
-        // Si hay rules insuficientes, lo verás aquí
-      }
-    );
-
-    return () => unsub();
-  }, [currentCompany?.id, setJobs]);
-
-  const handleGenerateAI = async () => {
-    // Validamos que al menos tengamos título y ubicación básica para dar contexto a la IA
-    if (!newJob.title || !newJob.location) {
-      setNotice({ type: 'error', message: "Ingresa el título y la ubicación para generar la oferta con IA." });
-      return;
-    }
-
-    setIsGenerating(true);
-    setNotice(null);
-    
-    // Construimos un contexto rico para que la IA genere una mejor descripción
-    const context = `
-      Puesto: ${newJob.title}
-      Categoría: ${newJob.category}
-      Ubicación: ${newJob.location}
-      Pago: ${newJob.paymentType}
-      Beneficios: ${newJob.benefits?.lunch ? 'Incluye almuerzo/colación' : 'Sin colación'}, ${newJob.benefits?.transport ? 'Transporte incluido: ' + newJob.transportInfo : 'Sin bus'}
-      Implementos de seguridad: ${newJob.otherBenefits || 'No especificado'}
-      Cupos: ${newJob.workersNeeded}
-    `;
-
+  const deleteJob = async (jobId: string) => {
+    if (!currentCompany?.id || !window.confirm("¿Eliminar esta oferta? Esta acción no se puede deshacer.")) return;
     try {
-      const result = await generateJobDescription(context);
-      if (result && result.length > 50) {
-        // Only update if we got a substantial response
-        setNewJob(prev => ({ ...prev, description: result }));
-        if (result.toLowerCase().includes("no se pudo")) {
-          setNotice({ type: 'error', message: result });
-        } else {
-          setNotice({ type: 'success', message: "Descripción generada con IA exitosamente." });
-        }
-      } else {
-        setNotice({ type: 'error', message: "La respuesta de IA fue demasiado corta o vacía." });
-      }
-    } catch (error: any) {
-      console.error("AI generation error:", error);
-      // Provide user-friendly error messages based on error type
-      if (error?.code === "functions/failed-precondition") {
-        setNotice({ type: 'error', message: "La IA no está configurada. Contacta al administrador." });
-      } else if (error?.code === "functions/permission-denied") {
-        setNotice({ type: 'error', message: "No tienes permisos para usar esta función." });
-      } else if (error?.code === "functions/unavailable") {
-        setNotice({ type: 'error', message: "Servicio de IA temporalmente no disponible. Intenta más tarde." });
-      } else if (error?.message) {
-        setNotice({ type: 'error', message: `Error de IA: ${error.message}` });
-      } else {
-        setNotice({ type: 'error', message: "Hubo un problema generando la descripción con IA. Intenta de nuevo." });
-      }
-    } finally {
-      setIsGenerating(false);
+      await deleteDoc(doc(db, "companies", currentCompany.id, "jobs", jobId));
+      setNotice({ type: "success", message: "Oferta eliminada." });
+    } catch {
+      setNotice({ type: "error", message: "No se pudo eliminar la oferta." });
     }
   };
 
-  const handleGetLocation = async () => {
-    setIsGettingLocation(true);
-    try {
-      const coords = await getCurrentPosition();
-      setNewJob(prev => ({
-        ...prev,
-        lat: coords.lat,
-        lng: coords.lng,
-        location: prev.location || 'Ubicación GPS capturada'
-      }));
-    } catch (error) {
-      setNotice({ type: 'error', message: "No se pudo obtener la ubicación GPS automática." });
-    } finally {
-      setIsGettingLocation(false);
-    }
-  };
-
-  const handleMapClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const lat = -33.0 - (y / rect.height) * 5;
-    const lng = -70.0 - (x / rect.width) * 3;
-    setNewJob(prev => ({ ...prev, lat, lng }));
-  };
-
-  const handleCreateJob = async () => {
-    if (!newJob.title || !newJob.description) {
-      setNotice({ type: 'error', message: "Completa el título y la descripción antes de publicar." });
-      return;
-    }
-    
-    const finalCoords =
-      newJob.lat && newJob.lng
-        ? { lat: newJob.lat, lng: newJob.lng }
-        : { lat: -33.4489, lng: -70.6693 };
-
-    if (!currentCompany?.id) {
-      setNotice({ type: 'error', message: "No hay empresa activa. Vuelve a iniciar sesión como empresa." });
-      return;
-    }
-
-    try {
-      const payload = {
-        title: newJob.title || '',
-        description: newJob.description || '',
-        workersNeeded: newJob.workersNeeded || 1,
-        workersFilled: 0,
-        startDate: newJob.startDate || '',
-        location: newJob.location || '',
-        coordinates: finalCoords,
-        isActive: false,
-        jobStatus: 'future',
-        qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=AgroConnect-${Date.now()}`,
-        sector: newJob.sector ?? 'agriculture',
-        category: newJob.category as any,
-        paymentType: newJob.paymentType as any,
-        benefits: newJob.benefits,
-        transportMode: newJob.transportMode,
-        transportInfo: newJob.transportInfo,
-        pickupPoints: newJob.pickupPoints,
-        departureTime: newJob.departureTime,
-        returnTime: newJob.returnTime,
-        transportCost: Number(newJob.transportCost || 0),
-        shiftType: newJob.shiftType,
-        shiftPattern: newJob.shiftPattern,
-        requiresOs10: Boolean(newJob.requiresOs10),
-        facilityType: newJob.facilityType,
-        otherBenefits: newJob.otherBenefits,
-        publishPublic: Boolean(newJob.publishPublic),
-        createdAt: serverTimestamp(),
-      };
-
-      await addDoc(collection(db, 'companies', currentCompany.id, 'jobs'), payload);
-
-      setShowForm(false);
-      setActiveTab('future');
-      setNotice({ type: 'success', message: "Oferta creada correctamente." });
-      setNewJob({
-        title: '',
-        description: '',
-        workersNeeded: 10,
-        startDate: new Date().toISOString().split('T')[0],
-        location: '',
-        sector: 'agriculture',
-        category: 'Cosecha',
-        paymentType: 'Al Día',
-        benefits: { transport: false, lunch: false },
-        transportMode: 'pending',
-        transportInfo: '',
-        pickupPoints: '',
-        departureTime: '',
-        returnTime: '',
-        transportCost: 0,
-        shiftType: 'day',
-        shiftPattern: '4x4',
-        requiresOs10: true,
-        facilityType: '',
-        otherBenefits: '',
-        publishPublic: false,
-        lat: -34.985,
-        lng: -71.239,
-      });
-    } catch (error: any) {
-      console.error(error);
-      setNotice({ type: 'error', message: `No se pudo publicar la oferta: ${error?.message || error}` });
-    }
-  };
-
-  const handleDeleteJob = async (jobId: string) => {
-    if (!confirm('¿Eliminar?')) return;
-    if (!currentCompany?.id) {
-      setNotice({ type: 'error', message: 'No hay empresa activa.' });
-      return;
-    }
-    try {
-      await deleteDoc(doc(db, 'companies', currentCompany.id, 'jobs', jobId));
-      setNotice({ type: 'success', message: 'Oferta eliminada.' });
-    } catch (e: any) {
-      console.error(e);
-      setNotice({ type: 'error', message: `No se pudo eliminar: ${e?.message || e}` });
-    }
-  };
-
-
-  const filteredJobs = jobs.filter(j => (j.jobStatus || 'active') === activeTab);
+  const filteredJobs = jobs.filter((job) => (job.jobStatus ?? (job.isActive ? "active" : "future")) === activeTab);
 
   return (
-    <div className="space-y-6">
-      {isSuspended && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-4 animate-in slide-in-from-top">
-           <div className="bg-red-100 p-2 rounded-full text-red-600"><AlertOctagon size={24} /></div>
-           <div><h3 className="font-bold text-red-800">Cuenta Suspendida</h3><p className="text-sm text-red-600">Regularice su deuda para publicar nuevas ofertas.</p></div>
-        </div>
-      )}
+    <div className="space-y-6 pb-12">
+      {isSuspended && <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><strong>Publicación suspendida.</strong> Regulariza el estado de la cuenta antes de crear nuevas ofertas.</div>}
+      {notice && <div className={`rounded-xl border px-4 py-3 text-sm ${notice.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}>{notice.message}</div>}
 
-      {notice && (
-        <div
-          className={`rounded-xl border px-4 py-3 text-sm ${
-            notice.type === 'success'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : notice.type === 'error'
-                ? 'border-red-200 bg-red-50 text-red-700'
-                : 'border-amber-200 bg-amber-50 text-amber-800'
-          }`}
-        >
-          {notice.message}
-        </div>
-      )}
-
-      <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-        <h2 className="text-2xl font-bold text-gray-800 tracking-tight">Gestión de Ofertas</h2>
-        <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm">
-          {(['future', 'active', 'closed'] as const).map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === tab ? 'bg-emerald-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}>{tab === 'future' ? 'Futuras' : tab === 'active' ? 'Activas' : 'Cerradas'}</button>
-          ))}
-        </div>
-        <button onClick={() => setShowForm(!showForm)} disabled={isSuspended} className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors shadow-sm ${isSuspended ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}>{showForm ? <X size={18} /> : <Plus size={18} />}{showForm ? 'Cancelar' : 'Nueva Oferta'}</button>
+      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+        <div><h2 className="text-2xl font-extrabold text-gray-900">Ofertas</h2><p className="mt-1 text-sm text-gray-500">Publica vacantes y revisa sus cupos y candidatos.</p></div>
+        <button type="button" onClick={onCreateOffer} disabled={isSuspended} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"><Plus size={18} /> Crear oferta</button>
       </div>
 
-      {showForm && (
-        <div className="bg-white p-8 rounded-3xl shadow-2xl border border-emerald-100 animate-fade-in space-y-8 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
-          
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-            <div className="space-y-6">
-              <h3 className="font-black text-gray-800 flex items-center gap-2 uppercase tracking-tighter italic"><Briefcase size={22} className="text-emerald-500"/> Configuración de la Oferta</h3>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Rubro de la oferta</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setNewJob({...newJob, sector: 'agriculture', category: 'Cosecha'})}
-                      className={`min-h-12 rounded-xl border-2 text-sm font-black transition ${newJob.sector !== 'security' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-gray-100 bg-white text-gray-500'}`}
-                    >
-                      Agricultura
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setNewJob({...newJob, sector: 'security', category: 'Guardia de seguridad'})}
-                      className={`min-h-12 rounded-xl border-2 text-sm font-black transition ${newJob.sector === 'security' ? 'border-blue-900 bg-blue-50 text-blue-950' : 'border-gray-100 bg-white text-gray-500'}`}
-                    >
-                      Seguridad
-                    </button>
-                  </div>
-                </div>
-                <div className="col-span-2"><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Título del Puesto</label><input type="text" className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none" value={newJob.title} onChange={e => setNewJob({...newJob, title: e.target.value})} placeholder="Ej: Cosechero de Manzanas" /></div>
-                <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Categoría</label><select className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm bg-white font-bold" value={newJob.category} onChange={e => setNewJob({...newJob, category: e.target.value as any})}>{CATEGORIES_BY_SECTOR[newJob.sector === 'security' ? 'security' : 'agriculture'].map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Tipo de Pago</label><select className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm bg-white font-bold" value={newJob.paymentType} onChange={e => setNewJob({...newJob, paymentType: e.target.value as any})}>{PAYMENT_TYPES.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
-                <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Fecha de Inicio</label><input type="date" className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm font-bold" value={newJob.startDate} onChange={e => setNewJob({...newJob, startDate: e.target.value})} /></div>
-                <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Nombre Ubicación</label><input type="text" className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm font-bold" value={newJob.location} onChange={e => setNewJob({...newJob, location: e.target.value})} placeholder="Ej: Fundo El Olivar" /></div>
-              </div>
-
-              <div className="bg-gray-50 p-5 rounded-2xl border-2 border-dashed border-gray-200 space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-black text-gray-500 uppercase tracking-widest flex items-center gap-2"><MapPin size={16} className="text-emerald-500"/> Ubicación GPS</span>
-                  <div className="flex gap-2">
-                    <button onClick={handleGetLocation} className="bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 hover:bg-emerald-50 hover:border-emerald-200 transition-all">
-                      {isGettingLocation ? <Loader2 size={12} className="animate-spin"/> : <Navigation size={12}/>} Mi GPS
-                    </button>
-                    <button onClick={() => setShowMapPicker(true)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 hover:bg-emerald-700 shadow-sm transition-all">
-                      <Globe size={12}/> Ubicar en Mapa
-                    </button>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-3 bg-white rounded-xl border border-gray-100 shadow-inner flex flex-col items-center">
-                    <span className="text-[9px] font-black text-gray-400 uppercase mb-1">Latitud</span>
-                    <span className="text-xs font-mono font-bold text-emerald-600">{newJob.lat?.toFixed(6) || '—'}</span>
-                  </div>
-                  <div className="p-3 bg-white rounded-xl border border-gray-100 shadow-inner flex flex-col items-center">
-                    <span className="text-[9px] font-black text-gray-400 uppercase mb-1">Longitud</span>
-                    <span className="text-xs font-mono font-bold text-emerald-600">{newJob.lng?.toFixed(6) || '—'}</span>
-                  </div>
-                </div>
-              </div>
-
-              {newJob.sector !== 'security' ? (
-                <div className="rounded-3xl border-2 border-emerald-100 bg-emerald-50 p-5 space-y-4">
-                  <h3 className="flex items-center gap-2 text-lg font-black text-emerald-950"><Bus size={22}/> Transporte de la faena</h3>
-                  <label className="block text-sm font-black text-emerald-900">
-                    ¿Cómo llegarán los trabajadores?
-                    <select
-                      value={newJob.transportMode}
-                      onChange={(e) => {
-                        const transportMode = e.target.value as JobOffer['transportMode'];
-                        setNewJob({...newJob, transportMode, benefits: {...newJob.benefits, transport: transportMode === 'employer_transport'}});
-                      }}
-                      className="mt-2 min-h-12 w-full rounded-xl border border-emerald-200 bg-white px-3 text-sm font-bold"
-                    >
-                      <option value="pending">Por confirmar</option>
-                      <option value="employer_transport">Empresa o contratista proporciona transporte</option>
-                      <option value="transport_allowance">Se entrega asignación de movilización</option>
-                      <option value="worker_own">Cada trabajador llega por sus medios</option>
-                    </select>
-                  </label>
-                  {newJob.transportMode === 'employer_transport' && (
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <input value={newJob.pickupPoints} onChange={(e) => setNewJob({...newJob, pickupPoints: e.target.value, transportInfo: e.target.value})} className="min-h-12 rounded-xl border border-emerald-200 px-3 text-sm font-bold md:col-span-2" placeholder="Puntos de encuentro o recorrido" />
-                      <label className="text-xs font-black text-emerald-900">Salida<input type="time" value={newJob.departureTime} onChange={(e) => setNewJob({...newJob, departureTime: e.target.value})} className="mt-1 min-h-12 w-full rounded-xl border border-emerald-200 px-3 text-sm" /></label>
-                      <label className="text-xs font-black text-emerald-900">Regreso aproximado<input type="time" value={newJob.returnTime} onChange={(e) => setNewJob({...newJob, returnTime: e.target.value})} className="mt-1 min-h-12 w-full rounded-xl border border-emerald-200 px-3 text-sm" /></label>
-                      <label className="text-xs font-black text-emerald-900 md:col-span-2">Costo para el trabajador<input type="number" min="0" value={newJob.transportCost} onChange={(e) => setNewJob({...newJob, transportCost: Number(e.target.value)})} className="mt-1 min-h-12 w-full rounded-xl border border-emerald-200 px-3 text-sm" /></label>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="rounded-3xl border-2 border-blue-100 bg-blue-50 p-5 space-y-4">
-                  <h3 className="flex items-center gap-2 text-lg font-black text-blue-950"><ShieldCheck size={22}/> Condiciones de seguridad</h3>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="text-xs font-black text-blue-950">Tipo de turno<select value={newJob.shiftType} onChange={(e) => setNewJob({...newJob, shiftType: e.target.value as JobOffer['shiftType']})} className="mt-1 min-h-12 w-full rounded-xl border border-blue-200 bg-white px-3 text-sm"><option value="day">Día</option><option value="night">Noche</option><option value="rotating">Rotativo</option></select></label>
-                    <label className="text-xs font-black text-blue-950">Modalidad<input value={newJob.shiftPattern} onChange={(e) => setNewJob({...newJob, shiftPattern: e.target.value})} className="mt-1 min-h-12 w-full rounded-xl border border-blue-200 px-3 text-sm" placeholder="Ej: 4x4" /></label>
-                    <label className="text-xs font-black text-blue-950 md:col-span-2">Tipo de instalación<input value={newJob.facilityType} onChange={(e) => setNewJob({...newJob, facilityType: e.target.value})} className="mt-1 min-h-12 w-full rounded-xl border border-blue-200 px-3 text-sm" placeholder="Ej: condominio, bodega o planta" /></label>
-                    <label className="flex min-h-12 items-center gap-3 rounded-xl bg-white px-3 text-sm font-black text-blue-950 md:col-span-2"><input type="checkbox" checked={Boolean(newJob.requiresOs10)} onChange={(e) => setNewJob({...newJob, requiresOs10: e.target.checked})} className="h-5 w-5 accent-blue-900"/> Requiere OS10 vigente</label>
-                  </div>
-                </div>
-              )}
-
-              <h3 className="font-black text-gray-800 flex items-center gap-2 pt-4 uppercase tracking-tighter italic"><ThumbsUp size={22} className="text-emerald-500"/> Beneficios e implementos</h3>
-              <div className="grid grid-cols-1 gap-4">
-                <div className={`p-4 rounded-xl border-2 transition-all flex justify-between items-center ${newJob.benefits?.lunch ? 'bg-orange-50 border-orange-200' : 'bg-white border-gray-100'}`}>
-                   <span className="flex items-center gap-2 font-bold text-sm"><Utensils size={20} className={newJob.benefits?.lunch ? 'text-orange-600' : 'text-gray-300'}/> Almuerzo Incluido</span>
-                   <input type="checkbox" checked={newJob.benefits?.lunch} onChange={e => setNewJob({...newJob, benefits: {...newJob.benefits, lunch: e.target.checked}})} className="w-5 h-5 accent-orange-600 cursor-pointer" />
-                </div>
-              </div>
-
-              <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 space-y-2">
-                <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-2"><ShieldCheck size={16}/> {newJob.sector === 'security' ? 'Uniforme e implementos' : 'Kit de trabajo'}</label>
-                <input type="text" className="w-full bg-white border-2 border-emerald-100 rounded-xl p-3 text-sm font-bold outline-none" placeholder={newJob.sector === 'security' ? 'Ej: uniforme y radio incluidos.' : 'Ej: gorro, bloqueador y guantes incluidos.'} value={newJob.otherBenefits} onChange={e => setNewJob({...newJob, otherBenefits: e.target.value})} />
-              </div>
-
-              <div className="bg-white p-4 rounded-2xl border border-gray-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-xs font-black text-gray-700 uppercase tracking-widest">Publicar en directorio público</div>
-                    <div className="text-[11px] text-gray-500">Visible para trabajadores sin iniciar sesión.</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(newJob.publishPublic)}
-                    onChange={(e) => setNewJob({ ...newJob, publishPublic: e.target.checked })}
-                    className="w-5 h-5 accent-emerald-600 cursor-pointer"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-6 flex flex-col">
-              <div className="bg-gray-900 rounded-3xl p-8 text-white flex-1 flex flex-col shadow-2xl relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-4 opacity-5"><Sparkles size={120}/></div>
-                <div className="flex justify-between items-center mb-6 relative z-10">
-                  <h3 className="text-xl font-bold flex items-center gap-2 italic">Redacción Inteligente</h3>
-                  <button 
-                    onClick={handleGenerateAI} 
-                    disabled={isGenerating} 
-                    className="bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase flex items-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    {isGenerating ? <Loader2 size={16} className="animate-spin"/> : <Wand2 size={16}/>} 
-                    {isGenerating ? 'Redactando...' : 'Mejorar con IA'}
-                  </button>
-                </div>
-                
-                <textarea 
-                  className="flex-1 w-full bg-white/10 border border-white/20 rounded-2xl p-4 text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none text-white placeholder-white/30" 
-                  rows={12} 
-                  value={newJob.description} 
-                  onChange={e => setNewJob({...newJob, description: e.target.value})} 
-                  placeholder="Aquí aparecerá la descripción profesional generada por la IA..."
-                ></textarea>
-                
-                <div className="mt-8 pt-8 border-t border-white/10">
-                   <div className="flex justify-between items-center mb-4">
-                     <p className="text-xs font-bold text-white/50 uppercase tracking-widest">Vacantes: {newJob.workersNeeded}</p>
-                     <span className="bg-emerald-500 text-white px-3 py-1 rounded-full text-xs font-black">{newJob.workersNeeded} PERS.</span>
-                   </div>
-                   <input type="range" min="1" max="150" className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-emerald-500" value={newJob.workersNeeded} onChange={e => setNewJob({...newJob, workersNeeded: parseInt(e.target.value)})} />
-                </div>
-                
-                <button onClick={handleCreateJob} className="w-full bg-emerald-500 hover:bg-emerald-400 text-white py-4 rounded-2xl font-black uppercase tracking-widest mt-8 shadow-xl shadow-emerald-500/20 transition-all transform active:scale-95">Publicar Oferta Laboral</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL MAPA */}
-      {showMapPicker && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-              <h3 className="text-lg font-black text-gray-800 uppercase tracking-tighter italic">Seleccionar Ubicación Visual</h3>
-              <button onClick={() => setShowMapPicker(false)} className="bg-white p-2 rounded-full shadow-sm text-gray-400 hover:text-red-500 transition-colors"><X size={20}/></button>
-            </div>
-            <div className="flex-1 relative bg-slate-100 overflow-hidden cursor-crosshair group" onClick={handleMapClick}>
-              <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#94a3b8_1px,transparent_1px)] [background-size:20px_20px]"></div>
-              {newJob.lat && (
-                <div className="absolute transition-all duration-300 pointer-events-none" style={{ top: `${((newJob.lat + 33.0) / -5) * 100}%`, left: `${((newJob.lng! + 70.0) / -3) * 100}%` }}>
-                  <div className="relative -top-10 -left-5">
-                    <div className="bg-emerald-600 text-white p-2 rounded-full shadow-2xl border-2 border-white animate-bounce"><MapPin size={24} /></div>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="p-6 bg-gray-50 border-t border-gray-100 flex justify-end">
-              <button onClick={() => setShowMapPicker(false)} className="bg-emerald-600 text-white px-8 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl">Confirmar Punto</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredJobs.map(job => (
-          <div key={job.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-lg transition-shadow">
-            <div className="p-6 flex-1">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                   <span className="text-[10px] font-black uppercase bg-gray-100 text-gray-500 px-2 py-0.5 rounded mr-2 tracking-widest">{job.category}</span>
-                   <h3 className="font-bold text-gray-800 text-lg mt-1 tracking-tight leading-tight">{job.title}</h3>
-                </div>
-                {job.qrCodeUrl && <img src={job.qrCodeUrl} className="w-10 h-10 shadow-sm rounded-lg" alt="QR" />}
-              </div>
-              <div className="flex gap-2 mb-4">
-                 <div className={`p-2 rounded-lg border ${job.benefits?.transport ? 'bg-blue-50 border-blue-100 text-blue-600 shadow-sm' : 'bg-gray-50 border-gray-100 text-gray-300'}`}><Bus size={18}/></div>
-                 <div className={`p-2 rounded-lg border ${job.benefits?.lunch ? 'bg-orange-50 border-orange-100 text-orange-600 shadow-sm' : 'bg-gray-50 border-gray-100 text-gray-300'}`}><Utensils size={18}/></div>
-                 <div className="p-2 rounded-lg border bg-emerald-50 border-emerald-100 text-emerald-600 flex items-center gap-1 shadow-sm"><Coins size={16}/><span className="text-[10px] font-black uppercase tracking-tighter">{job.paymentType}</span></div>
-              </div>
-              <p className="text-gray-600 text-sm line-clamp-2 mb-4 leading-relaxed">{job.description}</p>
-              <div className="flex justify-between text-xs text-gray-400 font-bold border-t pt-3">
-                <span className="flex items-center gap-1"><MapPin size={12} className="text-emerald-500" />{job.location}</span>
-                <span className="flex items-center gap-1"><UsersIcon size={12} className="text-blue-500"/> {job.workersFilled}/{job.workersNeeded}</span>
-              </div>
-            </div>
-            <div className="bg-gray-50 p-4 flex gap-2 border-t border-gray-100">
-              <button className="flex-1 bg-white border border-gray-200 text-[10px] font-black uppercase tracking-widest py-2.5 rounded-xl hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all shadow-sm">Postulantes</button>
-              <button onClick={() => handleDeleteJob(job.id)} className="p-2.5 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
-            </div>
-          </div>
-        ))}
+      <div className="inline-flex max-w-full overflow-x-auto rounded-xl border border-gray-200 bg-white p-1">
+        {(["active", "future", "closed"] as const).map((tab) => <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`min-h-11 whitespace-nowrap rounded-lg px-5 text-sm font-bold ${activeTab === tab ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-50"}`}>{tab === "active" ? "Activas" : tab === "future" ? "Borradores y futuras" : "Cerradas"}</button>)}
       </div>
+
+      {filteredJobs.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center"><Briefcase className="mx-auto text-gray-400" size={32} /><h3 className="mt-4 font-bold text-gray-900">No hay ofertas en esta sección</h3><p className="mt-1 text-sm text-gray-500">{activeTab === "active" ? "Crea y publica una oferta para comenzar a recibir postulaciones." : "Las ofertas aparecerán aquí según su estado."}</p>{activeTab === "active" && !isSuspended && <button type="button" onClick={onCreateOffer} className="mt-5 min-h-11 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white">Crear primera oferta</button>}</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {filteredJobs.map((job) => {
+            const remaining = Math.max(0, job.workersNeeded - job.workersFilled);
+            return <article key={job.id} className="flex flex-col rounded-2xl border border-gray-100 bg-white shadow-sm">
+              <div className="flex-1 p-5">
+                <div className="flex items-start justify-between gap-3"><div><span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-bold text-gray-600">{job.sector === "security" ? "Seguridad" : "Agricultura"}</span><h3 className="mt-3 text-lg font-extrabold text-gray-900">{job.title}</h3></div>{job.sector === "security" ? <ShieldCheck className="text-blue-800" /> : <Briefcase className="text-emerald-700" />}</div>
+                <p className="mt-2 line-clamp-2 text-sm text-gray-600">{job.description || "Sin descripción adicional."}</p>
+                <div className="mt-4 space-y-2 text-sm text-gray-600"><p className="flex items-center gap-2"><MapPin size={15} /> {job.location}</p>{job.sector === "agriculture" && <p className="flex items-center gap-2"><Bus size={15} /> {job.transportMode === "employer_transport" ? "Transporte proporcionado" : job.transportMode === "transport_allowance" ? "Asignación de transporte" : job.transportMode === "worker_own" ? "Traslado por cuenta del trabajador" : "Transporte por confirmar"}</p>}<p className="flex items-center gap-2"><Users size={15} /> {job.workersFilled} de {job.workersNeeded} cupos cubiertos</p></div>
+                <div className={`mt-4 rounded-xl px-3 py-2 text-sm font-bold ${remaining > 0 ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>{remaining > 0 ? `${remaining} cupos por cubrir` : "Cupos cubiertos"}</div>
+              </div>
+              <div className="flex gap-2 border-t border-gray-100 bg-gray-50 p-4"><button type="button" onClick={onViewCandidates} className="min-h-11 flex-1 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold text-gray-800 hover:border-emerald-300 hover:text-emerald-800">Ver candidatos</button><button type="button" onClick={() => void deleteJob(job.id)} aria-label={`Eliminar oferta ${job.title}`} className="min-h-11 min-w-11 rounded-xl text-gray-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="mx-auto" size={18} /></button></div>
+            </article>;
+          })}
+        </div>
+      )}
     </div>
   );
 };

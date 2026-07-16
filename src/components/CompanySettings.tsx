@@ -5,7 +5,6 @@ import { Company, JobOffer } from '../types';
 import { 
   Building2, 
   User, 
-  Camera, 
   Save, 
   Mail,
   Phone
@@ -74,7 +73,7 @@ const CompanySettings: React.FC<CompanySettingsProps> = ({ company, onUpdateComp
             <Building2 size={20} className="text-emerald-600" /> Identidad Corporativa
           </h3>
           <div className="flex flex-col md:flex-row gap-8 items-start border-b border-gray-50 pb-8">
-            <div className="relative group shrink-0">
+            <div className="relative shrink-0">
               <div className="w-32 h-32 rounded-3xl bg-emerald-50 border-2 border-emerald-100 flex items-center justify-center overflow-hidden shadow-inner">
                 {formData.logoUrl ? (
                   <img src={formData.logoUrl} alt="Logo" className="w-full h-full object-cover" />
@@ -82,9 +81,9 @@ const CompanySettings: React.FC<CompanySettingsProps> = ({ company, onUpdateComp
                   <Building2 size={48} className="text-emerald-300" />
                 )}
               </div>
-              <button className="absolute -bottom-2 -right-2 bg-gray-900 text-white p-2 rounded-xl hover:bg-emerald-600 transition-all shadow-lg border-2 border-white">
-                <Camera size={16} />
-              </button>
+              <p className="mt-2 max-w-32 text-center text-xs text-gray-500">
+                El logo se administra mediante la URL validada por soporte.
+              </p>
             </div>
             <div className="flex-1 space-y-4 w-full">
               <div>

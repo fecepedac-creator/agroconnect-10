@@ -26,9 +26,7 @@ import {
   Sprout,
   Wifi,
   Globe,
-  Bot,
   LogOut,
-  PlusCircle,
 } from "lucide-react";
 
 
@@ -159,15 +157,15 @@ const App: React.FC = () => {
     setCurrentCompany(updated);
   };
 
-  const handleInviteWorker = async (worker: Worker) => {
+  const handleInviteWorker = async (worker: Worker, jobId: string) => {
     if (!currentCompany?.id) {
       throw new Error("Selecciona una empresa antes de invitar.");
     }
     const activeJob = jobs.find(
-      (job) => job.isActive === true || job.jobStatus === "active"
+      (job) => job.id === jobId && (job.isActive === true || job.jobStatus === "active")
     );
     if (!activeJob) {
-      throw new Error("Primero crea o activa una oferta de trabajo.");
+      throw new Error("Selecciona una oferta activa antes de invitar.");
     }
     const inviteWorkerToJob = httpsCallable(functions, "inviteWorkerToJob");
     await inviteWorkerToJob({
@@ -274,6 +272,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentCompany?.id) {
       setCompanyStats(null);
+      setJobs([]);
       return;
     }
     const ref = doc(db, "stats_companies", currentCompany.id);
@@ -283,6 +282,35 @@ const App: React.FC = () => {
       () => setCompanyStats(null)
     );
     return () => unsub();
+  }, [currentCompany?.id]);
+
+  useEffect(() => {
+    if (!currentCompany?.id) return;
+    const jobsQuery = query(
+      collection(db, "companies", currentCompany.id, "jobs"),
+      orderBy("createdAt", "desc")
+    );
+    return onSnapshot(jobsQuery, (snapshot) => {
+      setJobs(snapshot.docs.map((jobDoc) => {
+        const data = jobDoc.data();
+        return {
+          id: jobDoc.id,
+          ...data,
+          title: data.title ?? "",
+          description: data.description ?? "",
+          workersNeeded: data.workersNeeded ?? 1,
+          workersFilled: data.workersFilled ?? 0,
+          startDate: data.startDate ?? "",
+          location: data.location ?? "",
+          coordinates: data.coordinates ?? { lat: -35.426, lng: -71.666 },
+          isActive: data.isActive ?? false,
+          jobStatus: data.jobStatus ?? (data.isActive ? "active" : "future"),
+        } as JobOffer;
+      }));
+    }, (error) => {
+      console.error("Error fetching company jobs:", error);
+      setJobs([]);
+    });
   }, [currentCompany?.id]);
 
   // Subscribe to global stats for SuperAdmin
@@ -574,7 +602,7 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-lg font-extrabold tracking-tight text-gray-900 leading-none">
-              Agro<span className="text-emerald-600">Connect</span>
+              Mundo<span className="text-emerald-600">Connect</span>
             </h1>
           </div>
         </div>
@@ -584,15 +612,12 @@ const App: React.FC = () => {
             <>
               <NavItem view={AppView.DASHBOARD} icon={LayoutDashboard} label="Resumen" />
 
-              <div className="pt-2 pb-1 px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Gestión</div>
-              <NavItem view={AppView.WORKERS} icon={Users} label="Mis Trabajadores" />
-              <NavItem view={AppView.JOBS} icon={Briefcase} label="Mis Ofertas" />
-              <NavItem view={AppView.PUBLISH_OFFER} icon={PlusCircle} label="Publicar oferta" />
-              <NavItem view={AppView.BROADCASTS} icon={Megaphone} label="Difusiones" />
-
-              <div className="pt-4 pb-1 px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Reclutamiento</div>
-              <NavItem view={AppView.GLOBAL_SEARCH} icon={Globe} label="Buscar Talento" />
-              <NavItem view={AppView.MATCHES} icon={Briefcase} label="Matches" />
+              <div className="pt-2 pb-1 px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Contratación</div>
+              <NavItem view={AppView.JOBS} icon={Briefcase} label="Ofertas" />
+              <NavItem view={AppView.GLOBAL_SEARCH} icon={Globe} label="Buscar candidatos" />
+              <NavItem view={AppView.MATCHES} icon={Users} label="Procesos de selección" />
+              <NavItem view={AppView.WORKERS} icon={Users} label="Equipo contratado" />
+              <NavItem view={AppView.BROADCASTS} icon={Megaphone} label="Difundir oferta" />
 
               <div className="pt-4 pb-1 px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">
                 Configuración
@@ -603,17 +628,7 @@ const App: React.FC = () => {
 
           {userRole === UserRole.ADMIN && (
             <>
-              <NavItem view={AppView.ADMIN} icon={LayoutDashboard} label="Panel SuperAdmin" />
-              <NavItem view={AppView.DASHBOARD} icon={LayoutDashboard} label="Dashboard" />
-              <NavItem view={AppView.GLOBAL_SEARCH} icon={Globe} label="Global Search" />
-              <NavItem view={AppView.MATCHES} icon={Briefcase} label="Matches" />
-              <NavItem view={AppView.WORKERS} icon={Users} label="Trabajadores" />
-              <NavItem view={AppView.JOBS} icon={Briefcase} label="Ofertas" />
-              <NavItem view={AppView.PUBLISH_OFFER} icon={PlusCircle} label="Publicar oferta" />
-              <NavItem view={AppView.BROADCASTS} icon={Megaphone} label="Difusiones" />
-              <NavItem view={AppView.SETTINGS_COMPANY} icon={Settings} label="Ajustes" />
-              <NavItem view={AppView.AI_REVIEW} icon={Bot} label="AI Review" />
-              {/* Worker Auth removed - development tool only */}
+              <NavItem view={AppView.ADMIN} icon={LayoutDashboard} label="Administrar MundoConnect" />
             </>
           )}
 
@@ -632,6 +647,7 @@ const App: React.FC = () => {
           <div className="flex items-center gap-4">
             <button
               onClick={() => setIsSidebarOpen(true)}
+              aria-label="Abrir menú principal"
               className="lg:hidden text-gray-500 hover:text-gray-700"
             >
               <Menu size={22} />
@@ -674,11 +690,11 @@ const App: React.FC = () => {
                 placeholder="Selecciona una empresa para ver y gestionar sus ofertas."
               >
                 {currentCompany && (
-                  <Jobs jobs={jobs} setJobs={setJobs} currentCompany={currentCompany} />
+                  <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={() => setCurrentView(AppView.MATCHES)} />
                 )}
               </CompanySelector>
             ) : currentCompany ? (
-              <Jobs jobs={jobs} setJobs={setJobs} currentCompany={currentCompany} />
+              <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={() => setCurrentView(AppView.MATCHES)} />
             ) : (
               <div className="text-sm text-gray-500">Selecciona una empresa para ver las ofertas.</div>
             ))}
@@ -711,7 +727,6 @@ const App: React.FC = () => {
               setActiveTab={setAdminTab}
               isDemoMode={Boolean(adminConfig.demoMode)}
               onToggleDemo={handleToggleDemoMode}
-              onBack={() => setCurrentView(AppView.DASHBOARD)}
             />
           )}
           {currentView === AppView.GLOBAL_SEARCH && (
@@ -721,6 +736,7 @@ const App: React.FC = () => {
               isLoading={publicWorkersLoading}
               isDemo={isDemoMode}
               currentCompany={currentCompany}
+              jobs={jobs}
             />
           )}
           {currentView === AppView.MATCHES && (

@@ -28,10 +28,10 @@ type WorkerCredential = {
 type ReviewState = "loading" | "not-reviewed" | "reviewed" | "error";
 
 const labels: Record<string, string> = {
-  worker_interested: "Trabajador interesado",
-  company_interested: "Invitacion enviada",
-  matched: "Match confirmado",
-  declined: "No continua",
+  worker_interested: "Postulación recibida",
+  company_interested: "Invitación enviada",
+  matched: "Ambos están interesados",
+  declined: "Proceso finalizado",
   hired: "Contratado",
   closed: "Cerrado",
 };
@@ -159,11 +159,12 @@ const CompanyMatches: React.FC<{company: Company}> = ({company}) => {
   return (
     <section className="space-y-5">
       <div>
-        <h2 className="text-2xl font-black text-gray-900">Matches laborales</h2>
-        <p className="mt-1 text-sm text-gray-600">Acepta candidatos y accede a su contacto y antecedentes solo despues del interes mutuo.</p>
+        <h2 className="text-2xl font-black text-gray-900">Procesos de selección</h2>
+        <p className="mt-1 text-sm text-gray-600">Revisa cada candidato. El contacto se habilita solamente cuando ambas partes están interesadas.</p>
       </div>
       {message && <div role="alert" aria-live="assertive" className="rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-900">{message}</div>}
       <div className="grid gap-4">
+        {matches.length === 0 && <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center"><Briefcase className="mx-auto text-gray-400" /><h3 className="mt-3 font-bold text-gray-900">Todavía no hay procesos de selección</h3><p className="mt-1 text-sm text-gray-500">Las postulaciones e invitaciones aparecerán aquí.</p></div>}
         {matches.map((match) => {
           const contact = contacts[match.id];
           const matchCredentials = credentials[match.id] || [];
