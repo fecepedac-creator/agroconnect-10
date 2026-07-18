@@ -19,6 +19,8 @@ import {
 import {
   canBootstrapLegacyMembership,
   canManageCompanyMembership,
+  hasActiveCompanyAuthority,
+  isActiveCompany,
   isActiveCompanyMembership,
 } from "./accessPolicy";
 
@@ -170,12 +172,20 @@ export const syncUserAccess = onCall(async (request) => {
       .limit(20)
       .get();
     const activeMemberships = memberships.docs.filter(
-      (doc) => doc.data()?.status === "active"
+      (doc) => isActiveCompanyMembership(doc.data())
+    );
+    const companySnapshots = await Promise.all(activeMemberships.map(
+      (membership) => db.collection("companies")
+        .doc(String(membership.ref.parent.parent?.id || "__invalid__"))
+        .get()
+    ));
+    const authorizedMemberships = activeMemberships.filter(
+      (_membership, index) => isActiveCompany(companySnapshots[index].data())
     );
     const selectedMembership =
-      activeMemberships.find(
+      authorizedMemberships.find(
         (doc) => doc.ref.parent.parent?.id === preferredCompanyId
-      ) || activeMemberships[0];
+      ) || authorizedMemberships[0];
 
     if (selectedMembership) {
       companyId = selectedMembership.ref.parent.parent?.id || null;
@@ -190,7 +200,7 @@ export const syncUserAccess = onCall(async (request) => {
         .where("adminEmail", "==", email)
         .limit(1)
         .get();
-      if (!companySnap.empty) {
+      if (!companySnap.empty && isActiveCompany(companySnap.docs[0].data())) {
         companyId = companySnap.docs[0].id;
         const legacyMemberRef = companySnap.docs[0].ref
           .collection("company_members")
@@ -289,11 +299,13 @@ export const setCompanyMember = onCall(async (request) => {
     .collection("company_members")
     .doc(caller.uid)
     .get();
-  const canManage =
-    await hasCurrentSuperadminClaims(caller.uid) ||
+  const callerIsSuperadmin = await hasCurrentSuperadminClaims(caller.uid);
+  const company = await db.collection("companies").doc(companyId).get();
+  const canManage = callerIsSuperadmin ||
     (
       callerMembership.exists &&
-      canManageCompanyMembership(callerMembership.data())
+      canManageCompanyMembership(callerMembership.data()) &&
+      isActiveCompany(company.data())
     );
   if (!canManage) {
     throw new HttpsError("permission-denied", "No puedes gestionar esta empresa.");
@@ -511,9 +523,14 @@ export const recordBillingEntry = onCall(async (request) => {
 });
 
 async function hasCompanyAccess(uid: string, companyId: string): Promise<boolean> {
-  const membership = await db.collection("companies").doc(companyId)
-    .collection("company_members").doc(uid).get();
-  return membership.exists && isActiveCompanyMembership(membership.data());
+  if (!companyId) return false;
+  const companyRef = db.collection("companies").doc(companyId);
+  const [company, membership] = await Promise.all([
+    companyRef.get(),
+    companyRef.collection("company_members").doc(uid).get(),
+  ]);
+  return company.exists && membership.exists &&
+    hasActiveCompanyAuthority(membership.data(), company.data());
 }
 
 async function assertSuperadmin(request: any) {
@@ -539,9 +556,15 @@ async function hasAnyCompanyAccess(uid: string): Promise<boolean> {
     .where("uid", "==", uid)
     .limit(20)
     .get();
-  return memberships.docs.some((membership) =>
+  const activeMemberships = memberships.docs.filter((membership) =>
     isActiveCompanyMembership(membership.data())
   );
+  const companies = await Promise.all(activeMemberships.map(
+    (membership) => db.collection("companies")
+      .doc(String(membership.ref.parent.parent?.id || "__invalid__"))
+      .get()
+  ));
+  return companies.some((company) => isActiveCompany(company.data()));
 }
 
 function matchIdFor(companyId: string, jobId: string, workerId: string): string {
@@ -764,7 +787,7 @@ export const respondToMatch = onCall(async (request) => {
     nextState = decision === "declined"
       ? "declined"
       : nextMatchState(workerDecision, companyDecision);
-    const update: Record<string, unknown> = {
+    const update: Record<string, any> = {
       workerDecision,
       companyDecision,
       state: nextState,

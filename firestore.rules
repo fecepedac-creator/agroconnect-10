@@ -51,11 +51,6 @@ service cloud.firestore {
       return signedIn() && myRole() == "worker";
     }
 
-    function isCompany() {
-      return signedIn()
-        && (myRole() == "company_admin" || myRole() == "company_hr");
-    }
-
     function myCompanyId() {
       return signedIn() && myUser().data.companyId != null
         ? myUser().data.companyId
@@ -74,21 +69,21 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/companies/$(companyId)/company_members/$(myUid())).data.get('role', '') in ['company_admin', 'company_hr'];
     }
 
+    function isActiveCompany(companyId) {
+      return companyId != null
+        && exists(/databases/$(database)/documents/companies/$(companyId))
+        && get(/databases/$(database)/documents/companies/$(companyId)).data.get('status', '') == 'active';
+    }
+
     function isMyCompany(companyId) {
-      return hasActiveCompanyMembership(companyId);
+      return isActiveCompany(companyId) && hasActiveCompanyMembership(companyId);
     }
 
     function canManageCompanyMembers(companyId) {
       return isSuperAdmin()
         || (
           isMyCompany(companyId)
-          && (
-            myRole() == 'company_admin'
-            || (
-              hasActiveCompanyMembership(companyId)
-              && get(/databases/$(database)/documents/companies/$(companyId)/company_members/$(myUid())).data.get('role', '') == 'company_admin'
-            )
-          )
+          && get(/databases/$(database)/documents/companies/$(companyId)/company_members/$(myUid())).data.get('role', '') == 'company_admin'
         );
     }
 
@@ -140,6 +135,7 @@ service cloud.firestore {
         && request.resource.data.companyName.size() <= 200
         && request.resource.data.appliedAt == request.time
         && request.resource.data.createdAt == request.time
+        && isActiveCompany(companyId)
         && exists(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId))
         && jobIsPublished(get(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId)).data)
         && publishedJobIsComplete(get(/databases/$(database)/documents/companies/$(companyId)/jobs/$(jobId)).data);
@@ -238,7 +234,7 @@ service cloud.firestore {
 
     match /discoverableWorkers/{workerId} {
       allow read: if isSuperAdmin()
-        || hasActiveCompanyMembership(myCompanyId())
+        || isMyCompany(myCompanyId())
         || (signedIn() && workerId == myUid());
       allow write: if false;
     }
@@ -272,8 +268,7 @@ service cloud.firestore {
       allow read: if isSuperAdmin()
         || (isWorker() && resource.data.workerId == myUid())
         || (
-          isCompany()
-          && hasActiveCompanyMembership(myCompanyId())
+          isMyCompany(myCompanyId())
           && resource.data.status == 'active'
           && resource.data.visibility == 'public'
         );
@@ -282,7 +277,7 @@ service cloud.firestore {
 
     match /worker_reputation/{workerId} {
       allow read: if isSuperAdmin()
-        || hasActiveCompanyMembership(myCompanyId())
+        || isMyCompany(myCompanyId())
         || (isWorker() && workerId == myUid());
       allow write: if false;
     }
@@ -299,10 +294,28 @@ service cloud.firestore {
        ====================== */
 
     match /company_leads/{leadId} {
-      allow create: if request.resource.data.companyName is string
+      allow create: if request.resource.data.keys().hasAll([
+                      'companyName', 'rut', 'email', 'status', 'createdAt', 'updatedAt'
+                    ])
+                    && request.resource.data.keys().hasOnly([
+                      'companyName', 'rut', 'email', 'phone', 'region', 'notes',
+                      'status', 'createdAt', 'updatedAt'
+                    ])
+                    && request.resource.data.companyName is string
+                    && request.resource.data.companyName.size() >= 2
+                    && request.resource.data.companyName.size() <= 160
                     && request.resource.data.rut is string
+                    && request.resource.data.rut.size() >= 7
+                    && request.resource.data.rut.size() <= 20
                     && request.resource.data.email is string
-                    && request.resource.data.status == "pending";
+                    && request.resource.data.email.size() >= 5
+                    && request.resource.data.email.size() <= 254
+                    && request.resource.data.status == "pending"
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time
+                    && (!('phone' in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() <= 40))
+                    && (!('region' in request.resource.data) || (request.resource.data.region is string && request.resource.data.region.size() <= 100))
+                    && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 1000));
       allow read, update: if isSuperAdmin();
       allow delete: if false;
     }
@@ -388,8 +401,7 @@ service cloud.firestore {
     match /companies/{companyId} {
 
       allow read: if isSuperAdmin()
-                  || isMyCompany(companyId)
-                  || isPublicDoc();
+                  || isMyCompany(companyId);
       allow create: if isSuperAdmin();
 
       allow update: if isSuperAdmin()
@@ -537,7 +549,7 @@ service cloud.firestore {
     match /comms_outbox/{docId} {
       allow create: if isSuperAdmin();
       allow read: if isSuperAdmin()
-        || (isCompany() && resource.data.companyId == myCompanyId());
+        || isMyCompany(resource.data.get('companyId', null));
       allow update, delete: if false;
     }
 
@@ -561,10 +573,23 @@ service cloud.firestore {
     // Flujo público vigente por centro
     match /centers/{centerId}/preadmissions/{docId} {
       allow create: if request.auth == null
+        && request.resource.data.keys().hasAll(['createdAt'])
+        && request.resource.data.keys().hasOnly([
+          'centerId', 'companyId', 'name', 'fullName', 'email', 'phone', 'rut',
+          'reason', 'motive', 'observation', 'observations', 'notes', 'status',
+          'createdAt'
+        ])
         && request.resource.data.createdAt == request.time
         && (!('centerId' in request.resource.data) || request.resource.data.centerId == centerId)
-        && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 200))
-        && (!('fullName' in request.resource.data) || (request.resource.data.fullName is string && request.resource.data.fullName.size() <= 200))
+        && (!('companyId' in request.resource.data) || request.resource.data.companyId == centerId)
+        && (('name' in request.resource.data) || ('fullName' in request.resource.data))
+        && (
+          ('email' in request.resource.data && request.resource.data.email is string && request.resource.data.email.size() >= 5)
+          || ('phone' in request.resource.data && request.resource.data.phone is string && request.resource.data.phone.size() >= 7)
+        )
+        && (!('status' in request.resource.data) || request.resource.data.status == 'pending')
+        && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 200))
+        && (!('fullName' in request.resource.data) || (request.resource.data.fullName is string && request.resource.data.fullName.size() >= 2 && request.resource.data.fullName.size() <= 200))
         && (!('email' in request.resource.data) || (request.resource.data.email is string && request.resource.data.email.size() <= 200))
         && (!('phone' in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() <= 50))
         && (!('rut' in request.resource.data) || (request.resource.data.rut is string && request.resource.data.rut.size() <= 30))
@@ -574,9 +599,21 @@ service cloud.firestore {
         && (!('observations' in request.resource.data) || (request.resource.data.observations is string && request.resource.data.observations.size() <= 500))
         && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 500));
 
-      allow read, update, delete: if isSuperAdmin()
-        || (isCompany() && resource.data.get("companyId", null) == myCompanyId())
-        || (isCompany() && resource.data.get("centerId", null) == myCompanyId());
+      allow read, delete: if isSuperAdmin()
+        || isMyCompany(centerId);
+
+      allow update: if isSuperAdmin()
+        || (
+          isMyCompany(centerId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'notes', 'observation', 'observations', 'updatedAt'
+          ])
+          && (!('status' in request.resource.data) || request.resource.data.status in ['pending', 'contacted', 'approved', 'rejected'])
+          && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 500))
+          && (!('observation' in request.resource.data) || (request.resource.data.observation is string && request.resource.data.observation.size() <= 500))
+          && (!('observations' in request.resource.data) || (request.resource.data.observations is string && request.resource.data.observations.size() <= 500))
+          && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt == request.time)
+        );
     }
 
     /* ======================
