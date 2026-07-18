@@ -66,7 +66,7 @@ export default function SectorLanding({sector}: Props) {
         </div>
       </header>
 
-      <main>
+      <main id="main-content" tabIndex={-1}>
         <section className="relative isolate overflow-hidden bg-slate-950 text-white">
           <div
             className="absolute inset-0 -z-20 bg-cover bg-center opacity-55"

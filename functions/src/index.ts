@@ -41,6 +41,7 @@ import {
   type Transaction,
 } from "firebase-admin/firestore";
 import {evaluateEligibility, type EligibilityReason} from "./jobPolicy";
+import {logOperationalEvent} from "./observability";
 
 export {upsertWorkerIdentity} from "./workerIdentity";
 
@@ -105,6 +106,7 @@ function getSuperadminEmails(): string[] {
 
 
 async function callGeminiText(apiKey: string, prompt: string, temperature = 0.3): Promise<string> {
+  const startedAt = Date.now();
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
     {
@@ -120,15 +122,45 @@ async function callGeminiText(apiKey: string, prompt: string, temperature = 0.3)
   );
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new HttpsError("internal", `Gemini error: ${text.slice(0, 500)}`);
+    // Consume the provider response without exposing its body to clients or logs.
+    await response.text();
+    logOperationalEvent({
+      functionName: "callGeminiText",
+      action: "generate_content",
+      outcome: "failure",
+      errorCode: "GEMINI_HTTP_ERROR",
+      durationMs: Date.now() - startedAt,
+      context: {providerStatus: response.status},
+    });
+    throw new HttpsError(
+      "unavailable",
+      "No pudimos generar el contenido en este momento.",
+      {errorCode: "GEMINI_UNAVAILABLE"}
+    );
   }
 
   const data = (await response.json()) as any;
   const contentText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!contentText) {
-    throw new HttpsError("internal", "Respuesta vacía desde Gemini.");
+    logOperationalEvent({
+      functionName: "callGeminiText",
+      action: "generate_content",
+      outcome: "failure",
+      errorCode: "GEMINI_EMPTY_RESPONSE",
+      durationMs: Date.now() - startedAt,
+    });
+    throw new HttpsError(
+      "unavailable",
+      "No pudimos generar el contenido en este momento.",
+      {errorCode: "GEMINI_EMPTY_RESPONSE"}
+    );
   }
+  logOperationalEvent({
+    functionName: "callGeminiText",
+    action: "generate_content",
+    outcome: "success",
+    durationMs: Date.now() - startedAt,
+  });
   return contentText.trim();
 }
 
@@ -138,8 +170,13 @@ async function getReplyToEmail(): Promise<string> {
     const config = snap.exists ? (snap.data() as any) : null;
     const replyTo = String(config?.notificationEmail || "").trim();
     return replyTo || GMAIL_REPLY_TO;
-  } catch (e) {
-    console.error("getReplyToEmail error:", e);
+  } catch {
+    logOperationalEvent({
+      functionName: "getReplyToEmail",
+      action: "load_notification_email",
+      outcome: "degraded",
+      errorCode: "CONFIG_READ_FAILED",
+    });
     return GMAIL_REPLY_TO;
   }
 }
@@ -1270,11 +1307,10 @@ export const closeJob = onCall(async (request) => {
 
   const matches = await db.collection("matches")
     .where("companyId", "==", companyId)
+    .where("jobId", "==", jobId)
+    .where("state", "in", [...OPERATIONAL_MATCH_STATES])
     .get();
-  const operationalMatches = matches.docs.filter((match) => {
-    const data = match.data();
-    return data.jobId === jobId && OPERATIONAL_MATCH_STATES.has(data.state);
-  });
+  const operationalMatches = matches.docs;
   for (let index = 0; index < operationalMatches.length; index += 100) {
     const batch = db.batch();
     operationalMatches.slice(index, index + 100).forEach((match) => {

@@ -281,6 +281,23 @@ const App: React.FC = () => {
     return () => window.removeEventListener("popstate", handlePop);
   }, []);
 
+  useEffect(() => {
+    const title = path === "/"
+      ? "MundoConnect | Personas y oportunidades"
+      : path.startsWith("/agro")
+        ? "AgroConnect | Trabajo agrícola"
+        : path.startsWith("/seguridad")
+          ? "SeguridadConnect | Trabajo en seguridad"
+          : path.startsWith("/trabajos") || path.startsWith("/worker")
+            ? "Oportunidades de trabajo | MundoConnect"
+            : path.startsWith("/portal-empresas")
+              ? "Acceso empresas | MundoConnect"
+              : path.startsWith("/control-mundoconnect") || path.startsWith("/admin")
+                ? "Control administrativo | MundoConnect"
+                : "MundoConnect";
+    document.title = title;
+  }, [path]);
+
   const authDebugEnabled = import.meta.env.DEV;
   const logAuthInfo = (...args: any[]) => {
     if (authDebugEnabled) {
@@ -346,7 +363,8 @@ const App: React.FC = () => {
     setJobsError(null);
     const jobsQuery = query(
       collection(db, "companies", currentCompany.id, "jobs"),
-      orderBy("createdAt", "desc")
+      orderBy("createdAt", "desc"),
+      limit(100)
     );
     return onSnapshot(jobsQuery, (snapshot) => {
       const entries = snapshot.docs.map((jobDoc) => {
@@ -710,7 +728,7 @@ const App: React.FC = () => {
         </nav>
       </aside>
 
-      <main className="flex-1 min-h-screen">
+      <main id="main-content" tabIndex={-1} className="flex-1 min-h-screen">
         {/* Topbar */}
         <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
           <div className="flex items-center gap-4">

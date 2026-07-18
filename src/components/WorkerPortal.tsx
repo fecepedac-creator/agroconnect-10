@@ -1,13 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import {
   collection,
   doc,
+  getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
+  startAfter,
   where,
+  type DocumentData,
+  type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import {
   Briefcase,
@@ -87,6 +92,52 @@ type DataResult<T> = {
   retry: () => void;
 };
 
+type PaginatedDataResult<T> = DataResult<T> & {
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMore: () => void;
+};
+
+const JOBS_PAGE_SIZE = 20;
+
+function mapPublicJob(docSnap: QueryDocumentSnapshot<DocumentData>): JobListing {
+  const data = docSnap.data();
+  return {
+    id: String(data.jobId || docSnap.id),
+    title: data.title ?? "",
+    description: data.description ?? "",
+    workersNeeded: data.workersNeeded ?? 0,
+    workersFilled: data.workersFilled ?? 0,
+    startDate: data.startDate ?? "",
+    location: data.location ?? "",
+    coordinates: data.coordinates ?? {lat: 0, lng: 0},
+    isActive: data.isActive ?? false,
+    publishPublic: data.publishPublic === true,
+    jobStatus: data.jobStatus ?? (data.isActive ? "active" : "future"),
+    sector: data.sector ?? "agriculture",
+    category: data.category ?? "Otros",
+    paymentType: data.paymentType,
+    payMode: data.payMode,
+    payAmount: data.payAmount,
+    payDetail: data.payDetail,
+    skillsRequired: data.skillsRequired,
+    benefits: data.benefits,
+    transportMode: data.transportMode,
+    transportInfo: data.transportInfo,
+    pickupPoints: data.pickupPoints,
+    departureTime: data.departureTime,
+    returnTime: data.returnTime,
+    transportCost: data.transportCost,
+    shiftType: data.shiftType,
+    shiftPattern: data.shiftPattern,
+    requiresOs10: data.requiresOs10,
+    facilityType: data.facilityType,
+    otherBenefits: data.otherBenefits,
+    companyId: data.companyId ?? "",
+    companyName: data.companyName ?? "",
+  } as JobListing;
+}
+
 const usePath = () => {
   const [path, setPath] = useState(window.location.pathname);
 
@@ -101,7 +152,9 @@ const usePath = () => {
     if (`${nextUrl.pathname}${nextUrl.search}` === `${window.location.pathname}${window.location.search}`) return;
     window.history.pushState({}, "", `${nextUrl.pathname}${nextUrl.search}`);
     setPath(nextUrl.pathname);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+    window.setTimeout(() => document.querySelector<HTMLElement>("#main-content")?.focus(), 0);
   }, []);
 
   return { path, navigate };
@@ -122,72 +175,114 @@ const useAuthUser = () => {
   return { authUser, loading };
 };
 
-const useJobs = (): DataResult<JobListing[]> => {
+const useJobs = (sector: EmploymentSector): PaginatedDataResult<JobListing[]> => {
   const [jobs, setJobs] = useState<JobListing[]>([]);
   const [status, setStatus] = useState<DataStatus>("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const cursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const hasMoreRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const requestRef = useRef(0);
+  const retry = useCallback(() => setRetryKey((current) => current + 1), []);
+
+  const loadPage = useCallback(async (reset: boolean) => {
+    const requestId = ++requestRef.current;
+    if (reset) {
+      setStatus("loading");
+      setError(null);
+      cursorRef.current = null;
+    } else {
+      if (!cursorRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+    }
+
+    try {
+      const constraints = [
+        where("sector", "==", sector),
+        where("publishPublic", "==", true),
+        where("isActive", "==", true),
+        orderBy("updatedAt", "desc"),
+        ...(reset || !cursorRef.current ? [] : [startAfter(cursorRef.current)]),
+        limit(JOBS_PAGE_SIZE),
+      ];
+      const snapshot = await getDocs(query(collection(db, "publicJobs"), ...constraints));
+      if (requestId !== requestRef.current) return;
+
+      const entries = snapshot.docs.map(mapPublicJob);
+      cursorRef.current = snapshot.docs[snapshot.docs.length - 1] ?? null;
+      hasMoreRef.current = snapshot.size === JOBS_PAGE_SIZE;
+      setHasMore(hasMoreRef.current);
+      setJobs((current) => {
+        const next = reset
+          ? entries
+          : [...new Map([...current, ...entries].map((job) => [`${job.companyId}_${job.id}`, job])).values()];
+        setStatus(next.length === 0 ? "empty" : "ready");
+        return next;
+      });
+    } catch {
+      if (requestId !== requestRef.current) return;
+      setStatus(reset ? "error" : "ready");
+      setError("No pudimos cargar las ofertas. Revisa tu conexion e intenta nuevamente.");
+    } finally {
+      if (requestId === requestRef.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+    }
+  }, [sector]);
+
+  useEffect(() => {
+    void loadPage(true);
+  }, [loadPage, retryKey]);
+
+  const loadMore = useCallback(() => void loadPage(false), [loadPage]);
+  return {data: jobs, status, error, retry, hasMore, loadingMore, loadMore};
+};
+
+const useDirectJob = (jobId: string, sector: EmploymentSector): DataResult<JobListing | null> => {
+  const [job, setJob] = useState<JobListing | null>(null);
+  const [status, setStatus] = useState<DataStatus>(jobId ? "loading" : "empty");
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const retry = useCallback(() => setRetryKey((current) => current + 1), []);
 
   useEffect(() => {
+    if (!jobId) {
+      setJob(null);
+      setStatus("empty");
+      setError(null);
+      return;
+    }
+
+    let active = true;
     setStatus("loading");
     setError(null);
-    const q = query(collection(db, "publicJobs"), orderBy("updatedAt", "desc"));
-    const unsub = onSnapshot(q, async (snap) => {
-      const entries = await Promise.all(
-        snap.docs.map(async (docSnap) => {
-          const data = docSnap.data() as any;
-          const companyId = data.companyId ?? "";
-          const companyName = data.companyName ?? "";
+    void getDocs(query(collection(db, "publicJobs"), where("jobId", "==", jobId), limit(5)))
+      .then((snapshot) => {
+        if (!active) return;
+        const match = snapshot.docs
+          .map(mapPublicJob)
+          .find((candidate) => candidate.sector === sector && candidate.publishPublic && candidate.isActive && candidate.jobStatus !== "closed") ?? null;
+        setJob(match);
+        setStatus(match ? "ready" : "empty");
+      })
+      .catch(() => {
+        if (!active) return;
+        setJob(null);
+        setStatus("error");
+        setError("No pudimos comprobar esta oferta. Revisa tu conexion e intenta nuevamente.");
+      });
 
-          return {
-            id: String(data.jobId || docSnap.id),
-            title: data.title ?? "",
-            description: data.description ?? "",
-            workersNeeded: data.workersNeeded ?? 0,
-            workersFilled: data.workersFilled ?? 0,
-            startDate: data.startDate ?? "",
-            location: data.location ?? "",
-            coordinates: data.coordinates ?? { lat: 0, lng: 0 },
-            isActive: data.isActive ?? false,
-            publishPublic: data.publishPublic === true,
-            jobStatus: data.jobStatus ?? (data.isActive ? "active" : "future"),
-            sector: data.sector ?? "agriculture",
-            category: data.category ?? "Otros",
-            paymentType: data.paymentType,
-            payMode: data.payMode,
-            payAmount: data.payAmount,
-            payDetail: data.payDetail,
-            skillsRequired: data.skillsRequired,
-            benefits: data.benefits,
-            transportMode: data.transportMode,
-            transportInfo: data.transportInfo,
-            pickupPoints: data.pickupPoints,
-            departureTime: data.departureTime,
-            returnTime: data.returnTime,
-            transportCost: data.transportCost,
-            shiftType: data.shiftType,
-            shiftPattern: data.shiftPattern,
-            requiresOs10: data.requiresOs10,
-            facilityType: data.facilityType,
-            otherBenefits: data.otherBenefits,
-            companyId,
-            companyName,
-          } as JobListing;
-        })
-      );
+    return () => {
+      active = false;
+    };
+  }, [jobId, retryKey, sector]);
 
-      setJobs(entries);
-      setStatus(entries.length === 0 ? "empty" : "ready");
-    }, () => {
-      setStatus("error");
-      setError("No pudimos cargar las ofertas. Revisa tu conexion e intenta nuevamente.");
-    });
-
-    return () => unsub();
-  }, [retryKey]);
-
-  return {data: jobs, status, error, retry};
+  return {data: job, status, error, retry};
 };
 
 const useWorkerApplications = (uid?: string): DataResult<WorkerApplication[]> => {
@@ -207,7 +302,7 @@ const useWorkerApplications = (uid?: string): DataResult<WorkerApplication[]> =>
 
     setStatus("loading");
     setError(null);
-    const q = query(collection(db, "workers", uid, "applications"), orderBy("appliedAt", "desc"));
+    const q = query(collection(db, "workers", uid, "applications"), orderBy("appliedAt", "desc"), limit(50));
     const unsub = onSnapshot(q, (snap) => {
       const list = snap.docs.map((docSnap) => ({
         id: docSnap.id,
@@ -245,7 +340,8 @@ const useWorkerMatches = (uid?: string): DataResult<WorkerMatch[]> => {
     const matchesQuery = query(
       collection(db, "matches"),
       where("workerId", "==", uid),
-      orderBy("updatedAt", "desc")
+      orderBy("updatedAt", "desc"),
+      limit(50)
     );
     const unsub = onSnapshot(matchesQuery, (snap) => {
       const entries = snap.docs.map((matchDoc) => ({
@@ -299,12 +395,12 @@ const UnavailableJob = ({onBack}: {onBack: () => void}) => (
 );
 
 const RegisterCTASticky = ({ onClick }: { onClick: () => void }) => (
-  <div className="fixed bottom-0 inset-x-0 z-40 bg-emerald-600 text-white">
+  <div className="fixed bottom-0 inset-x-0 z-40 bg-emerald-800 text-white">
     <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
       <div className="font-extrabold text-sm sm:text-base tracking-tight">Regístrate gratis para postular</div>
       <button
         onClick={onClick}
-        className="bg-white text-emerald-700 px-5 py-2 rounded-full text-xs sm:text-sm font-black uppercase tracking-wider shadow-lg hover:bg-emerald-50"
+        className="min-h-12 bg-white text-emerald-900 px-5 py-2 rounded-full text-sm font-black uppercase tracking-wider shadow-lg hover:bg-emerald-50"
       >
         Crear cuenta
       </button>
@@ -346,7 +442,7 @@ const PublicLayout = ({ children, onAuthClick, sector }: { children: React.React
         </button>
       </div>
     </header>
-    <main className="max-w-6xl mx-auto px-4 py-8 pb-28">{children}</main>
+    <main id="main-content" tabIndex={-1} className="max-w-6xl mx-auto px-4 py-8 pb-28">{children}</main>
   </div>;
 };
 
@@ -382,7 +478,7 @@ const WorkerLayout = ({ children, onNavigate, onLogout, sector }: { children: Re
         </button>
       </div>
     </header>
-    <main className="max-w-6xl mx-auto px-4 py-8">{children}</main>
+    <main id="main-content" tabIndex={-1} className="max-w-6xl mx-auto px-4 py-8">{children}</main>
   </div>;
 };
 
@@ -393,7 +489,7 @@ const JobCardPublic = ({ job, onSelect }: { job: JobListing; onSelect: () => voi
   >
     <div className="flex items-start justify-between gap-4">
       <div>
-        <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+        <span className="text-xs font-black uppercase text-emerald-800 bg-emerald-50 px-2 py-1 rounded-full">
           {job.category}
         </span>
         <h3 className="text-lg font-extrabold text-gray-900 mt-2">{job.title}</h3>
@@ -401,7 +497,7 @@ const JobCardPublic = ({ job, onSelect }: { job: JobListing; onSelect: () => voi
           <Building2 size={14} /> {job.companyName || "Empresa"}
         </p>
       </div>
-      <div className="text-right text-xs text-gray-400 font-semibold">
+      <div className="text-right text-xs text-gray-600 font-semibold">
         <div className="flex items-center gap-1 justify-end">
           <MapPin size={14} className="text-emerald-600" /> {job.location || "Ubicación por confirmar"}
         </div>
@@ -433,7 +529,7 @@ const JobCardPrivate = ({ job, onSelect, applied }: { job: JobListing; onSelect:
     <div className="flex flex-col gap-3">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+          <span className="text-xs font-black uppercase text-emerald-800 bg-emerald-50 px-2 py-1 rounded-full">
             {job.category}
           </span>
           <h3 className="text-lg font-extrabold text-gray-900 mt-2">{job.title}</h3>
@@ -441,7 +537,7 @@ const JobCardPrivate = ({ job, onSelect, applied }: { job: JobListing; onSelect:
             <Building2 size={14} /> {job.companyName || "Empresa"}
           </p>
         </div>
-        <div className="text-right text-xs text-gray-400 font-semibold">
+        <div className="text-right text-xs text-gray-600 font-semibold">
           <div className="flex items-center gap-1 justify-end">
             <MapPin size={14} className="text-emerald-600" /> {job.location || "Ubicación por confirmar"}
           </div>
@@ -477,7 +573,7 @@ const JobDetailPublic = ({ job }: { job: JobListing }) => {
 
   return <div className="space-y-6">
     <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
-      <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
+      <span className="text-xs font-black uppercase text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full">
         {job.category}
       </span>
       <h2 className="text-2xl font-extrabold text-gray-900 mt-3">{job.title}</h2>
@@ -571,7 +667,7 @@ const SafetyReportButton = ({job}: {job: JobListing}) => {
 const JobDetailPrivate = ({ job, applied, applying, canApply, onApply }: { job: JobListing; applied: boolean; applying: boolean; canApply: boolean; onApply: () => void }) => (
   <div className="space-y-6">
     <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
-      <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
+      <span className="text-xs font-black uppercase text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full">
         {job.category}
       </span>
       <h2 className="text-2xl font-extrabold text-gray-900 mt-3">{job.title}</h2>
@@ -656,7 +752,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
   const experience = SECTOR_EXPERIENCES[sector];
   const go = useCallback((to: string) => navigate(`${to}${sectorQuery(sector)}`), [navigate, sector]);
   const { authUser, loading } = useAuthUser();
-  const jobsResult = useJobs();
+  const jobsResult = useJobs(sector);
   const applicationsResult = useWorkerApplications(authUser?.uid);
   const matchesResult = useWorkerMatches(authUser?.uid);
   const jobs = jobsResult.data;
@@ -780,7 +876,11 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
   );
 
   const jobIdMatch = path.match(/^\/trabajos\/([^/]+)$/);
-  const selectedJob = jobIdMatch ? visibleJobs.find((job) => job.id === jobIdMatch[1]) : undefined;
+  const routeJobId = jobIdMatch?.[1] || "";
+  const directJobResult = useDirectJob(routeJobId, sector);
+  const selectedJob = jobIdMatch
+    ? visibleJobs.find((job) => job.id === routeJobId) || directJobResult.data || undefined
+    : undefined;
 
   const appliedToSelected = selectedJob
     ? applications.some((app) => app.jobId === selectedJob.id && app.companyId === selectedJob.companyId)
@@ -1073,7 +1173,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
             {matchNotice && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{matchNotice}</div>}
             {actionError && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{actionError}</div>}
             {applicationsResult.status === "empty" && matchesResult.status === "empty" && (
-              <div className="text-sm text-gray-400 text-center py-12 border border-dashed rounded-2xl">
+              <div className="text-sm text-gray-600 text-center py-12 border border-dashed rounded-2xl">
                 Aún no tienes postulaciones registradas.
               </div>
             )}
@@ -1116,7 +1216,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
             <div className="mt-6 grid gap-3">
               <DataStateMessage status={documentsStatus} loadingMessage="Cargando tus documentos..." error={documentsError} onRetry={() => setDocumentsRetryKey((current) => current + 1)} />
               {documentsStatus === "empty" && (
-                <div className="text-sm text-gray-400 text-center py-10 border border-dashed rounded-2xl">
+                <div className="text-sm text-gray-600 text-center py-10 border border-dashed rounded-2xl">
                   Aún no hay documentos registrados.
                 </div>
               )}
@@ -1144,11 +1244,12 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
         <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
           <div className="space-y-6">
             <div>
-              <h2 className="text-2xl font-extrabold text-gray-900">{experience.jobsTitle}</h2>
+              <h1 className="text-2xl font-extrabold text-gray-900">{experience.jobsTitle}</h1>
               <p className="text-sm text-gray-500 mt-2">{experience.jobsDescription}</p>
             </div>
             <DataStateMessage status={jobsResult.status} loadingMessage="Cargando ofertas disponibles..." error={jobsResult.error} onRetry={jobsResult.retry} />
-            {jobsResult.status === "loading" || jobsResult.status === "error" ? null : jobIdMatch && !selectedJob ? (
+            {jobIdMatch && <DataStateMessage status={directJobResult.status} loadingMessage="Comprobando esta oferta..." error={directJobResult.error} onRetry={directJobResult.retry} />}
+            {jobsResult.status === "loading" || jobsResult.status === "error" || directJobResult.status === "loading" || directJobResult.status === "error" ? null : jobIdMatch && !selectedJob ? (
               <UnavailableJob onBack={() => go("/trabajos")} />
             ) : jobIdMatch && selectedJob ? (
               <>
@@ -1169,6 +1270,12 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
                 {visibleJobs.length === 0 && (
                   <div className="rounded-3xl border border-dashed border-gray-300 bg-white p-10 text-center text-sm text-gray-500">No hay ofertas disponibles en esta seccion.</div>
                 )}
+                {jobsResult.hasMore && (
+                  <button type="button" onClick={jobsResult.loadMore} disabled={jobsResult.loadingMore} aria-busy={jobsResult.loadingMore} className="min-h-14 rounded-2xl border-2 border-slate-300 bg-white px-6 text-base font-black text-slate-800 disabled:opacity-60">
+                    {jobsResult.loadingMore ? "Cargando mas ofertas..." : "Ver mas ofertas"}
+                  </button>
+                )}
+                {jobsResult.status === "ready" && jobsResult.error && <p role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{jobsResult.error}</p>}
               </div>
             )}
           </div>
@@ -1180,11 +1287,12 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
       <PublicLayout onAuthClick={() => go("/auth")} sector={sector}>
         <div className="space-y-6">
           <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
-            <h2 className="text-2xl font-extrabold text-gray-900">{experience.jobsTitle}</h2>
+            <h1 className="text-2xl font-extrabold text-gray-900">{experience.jobsTitle}</h1>
             <p className="text-sm text-gray-500 mt-2">{experience.jobsDescription}</p>
           </div>
           <DataStateMessage status={jobsResult.status} loadingMessage="Cargando ofertas disponibles..." error={jobsResult.error} onRetry={jobsResult.retry} />
-          {jobsResult.status === "loading" || jobsResult.status === "error" ? null : jobIdMatch && !selectedJob ? (
+          {jobIdMatch && <DataStateMessage status={directJobResult.status} loadingMessage="Comprobando esta oferta..." error={directJobResult.error} onRetry={directJobResult.retry} />}
+          {jobsResult.status === "loading" || jobsResult.status === "error" || directJobResult.status === "loading" || directJobResult.status === "error" ? null : jobIdMatch && !selectedJob ? (
             <UnavailableJob onBack={() => go("/trabajos")} />
           ) : jobIdMatch && selectedJob ? (
             <JobDetailPublic job={selectedJob} />
@@ -1199,6 +1307,12 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
                   <p className="mt-2 text-base text-gray-500">Estamos incorporando empresas y ofertas verificadas de tu zona.</p>
                 </div>
               )}
+              {jobsResult.hasMore && (
+                <button type="button" onClick={jobsResult.loadMore} disabled={jobsResult.loadingMore} aria-busy={jobsResult.loadingMore} className="min-h-14 rounded-2xl border-2 border-slate-300 bg-white px-6 text-base font-black text-slate-800 disabled:opacity-60">
+                  {jobsResult.loadingMore ? "Cargando mas ofertas..." : "Ver mas ofertas"}
+                </button>
+              )}
+              {jobsResult.status === "ready" && jobsResult.error && <p role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{jobsResult.error}</p>}
             </div>
           )}
         </div>
