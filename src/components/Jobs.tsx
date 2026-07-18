@@ -1,7 +1,7 @@
 import React, { useState } from "react";
-import { deleteDoc, doc } from "firebase/firestore";
-import { Briefcase, Bus, MapPin, Plus, ShieldCheck, Trash2, Users } from "lucide-react";
-import { db } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+import { ArchiveX, Briefcase, Bus, MapPin, Plus, ShieldCheck, Users } from "lucide-react";
+import { functions } from "../firebase";
 import { Company, JobOffer } from "../types";
 
 interface JobsProps {
@@ -14,15 +14,31 @@ interface JobsProps {
 const Jobs: React.FC<JobsProps> = ({ jobs, currentCompany, onCreateOffer, onViewCandidates }) => {
   const [activeTab, setActiveTab] = useState<"future" | "active" | "closed">("active");
   const [notice, setNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [closingJobId, setClosingJobId] = useState<string | null>(null);
   const isSuspended = currentCompany?.status === "overdue" || currentCompany?.status === "suspended";
 
-  const deleteJob = async (jobId: string) => {
-    if (!currentCompany?.id || !window.confirm("¿Eliminar esta oferta? Esta acción no se puede deshacer.")) return;
+  const closeJob = async (job: JobOffer) => {
+    if (!currentCompany?.id || closingJobId) return;
+    const confirmed = window.confirm(
+      `¿Cerrar la oferta "${job.title}"? Dejará de ser pública y sus procesos pendientes se cerrarán. El historial se conservará.`
+    );
+    if (!confirmed) return;
+
+    setClosingJobId(job.id);
+    setNotice(null);
     try {
-      await deleteDoc(doc(db, "companies", currentCompany.id, "jobs", jobId));
-      setNotice({ type: "success", message: "Oferta eliminada." });
-    } catch {
-      setNotice({ type: "error", message: "No se pudo eliminar la oferta." });
+      await httpsCallable(functions, "closeJob")({
+        companyId: currentCompany.id,
+        jobId: job.id,
+        reason: "closed_by_company",
+      });
+      setNotice({ type: "success", message: `La oferta "${job.title}" fue cerrada.` });
+      setActiveTab("closed");
+    } catch (error: unknown) {
+      console.error("closeJob failed", error);
+      setNotice({ type: "error", message: "No se pudo cerrar la oferta. Intenta nuevamente." });
+    } finally {
+      setClosingJobId(null);
     }
   };
 
@@ -31,7 +47,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, currentCompany, onCreateOffer, onView
   return (
     <div className="space-y-6 pb-12">
       {isSuspended && <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><strong>Publicación suspendida.</strong> Regulariza el estado de la cuenta antes de crear nuevas ofertas.</div>}
-      {notice && <div className={`rounded-xl border px-4 py-3 text-sm ${notice.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}>{notice.message}</div>}
+      {notice && <div role="status" aria-live="polite" className={`rounded-xl border px-4 py-3 text-sm ${notice.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}>{notice.message}</div>}
 
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div><h2 className="text-2xl font-extrabold text-gray-900">Ofertas</h2><p className="mt-1 text-sm text-gray-500">Publica vacantes y revisa sus cupos y candidatos.</p></div>
@@ -55,7 +71,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, currentCompany, onCreateOffer, onView
                 <div className="mt-4 space-y-2 text-sm text-gray-600"><p className="flex items-center gap-2"><MapPin size={15} /> {job.location}</p>{job.sector === "agriculture" && <p className="flex items-center gap-2"><Bus size={15} /> {job.transportMode === "employer_transport" ? "Transporte proporcionado" : job.transportMode === "transport_allowance" ? "Asignación de transporte" : job.transportMode === "worker_own" ? "Traslado por cuenta del trabajador" : "Transporte por confirmar"}</p>}<p className="flex items-center gap-2"><Users size={15} /> {job.workersFilled} de {job.workersNeeded} cupos cubiertos</p></div>
                 <div className={`mt-4 rounded-xl px-3 py-2 text-sm font-bold ${remaining > 0 ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>{remaining > 0 ? `${remaining} cupos por cubrir` : "Cupos cubiertos"}</div>
               </div>
-              <div className="flex gap-2 border-t border-gray-100 bg-gray-50 p-4"><button type="button" onClick={() => onViewCandidates(job.id)} className="min-h-11 flex-1 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold text-gray-800 hover:border-emerald-300 hover:text-emerald-800">Ver candidatos</button><button type="button" onClick={() => void deleteJob(job.id)} aria-label={`Eliminar oferta ${job.title}`} className="min-h-11 min-w-11 rounded-xl text-gray-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="mx-auto" size={18} /></button></div>
+              <div className="flex gap-2 border-t border-gray-100 bg-gray-50 p-4"><button type="button" onClick={() => onViewCandidates(job.id)} className="min-h-11 flex-1 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold text-gray-800 hover:border-emerald-300 hover:text-emerald-800">Ver candidatos</button>{job.jobStatus !== "closed" && <button type="button" onClick={() => void closeJob(job)} disabled={Boolean(closingJobId)} aria-label={`Cerrar oferta ${job.title}`} className="min-h-11 min-w-11 rounded-xl text-gray-500 hover:bg-amber-50 hover:text-amber-800 disabled:cursor-wait disabled:opacity-50"><ArchiveX className="mx-auto" size={18} /><span className="sr-only">{closingJobId === job.id ? "Cerrando oferta" : "Cerrar oferta"}</span></button>}</div>
             </article>;
           })}
         </div>

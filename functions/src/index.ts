@@ -30,7 +30,9 @@ import {
   Timestamp,
   getFirestore,
   type DocumentReference,
+  type Transaction,
 } from "firebase-admin/firestore";
+import {evaluateEligibility, type EligibilityReason} from "./jobPolicy";
 
 admin.initializeApp();
 
@@ -571,6 +573,57 @@ function matchIdFor(companyId: string, jobId: string, workerId: string): string 
   return [companyId, jobId, workerId].join("_");
 }
 
+const ELIGIBILITY_REASON_LABELS: Record<EligibilityReason, string> = {
+  company_inactive: "la empresa no está activa",
+  job_inactive: "la oferta no está activa",
+  job_full: "la oferta no tiene cupos disponibles",
+  worker_unavailable: "el trabajador figura como no disponible",
+  matching_consent_required: "falta el consentimiento para participar en matches",
+  sector_mismatch: "el sector del perfil no coincide con la oferta",
+  os10_required: "se requiere OS10 vigente",
+  credential_required: "faltan credenciales activas requeridas",
+};
+
+function jobRequiresCredentials(job: Record<string, unknown>): boolean {
+  return Array.isArray(job.requiredCredentialTypes) &&
+    job.requiredCredentialTypes.some((value) => String(value || "").trim());
+}
+
+async function getActiveWorkerCredentials(
+  transaction: Transaction,
+  workerId: string,
+  job: Record<string, unknown>
+): Promise<Record<string, unknown>[]> {
+  if (!jobRequiresCredentials(job)) return [];
+
+  const credentials = await transaction.get(
+    db.collection("worker_credentials")
+      .where("workerId", "==", workerId)
+      .where("status", "==", "active")
+      .limit(100)
+  );
+  return credentials.docs.map((credential) => credential.data());
+}
+
+function assertEligibleForJob(input: {
+  company: unknown;
+  job: unknown;
+  worker: unknown;
+  credentials: unknown[];
+}): void {
+  const result = evaluateEligibility(input);
+  if (result.eligible) return;
+
+  const explanation = result.reasons
+    .map((reason) => ELIGIBILITY_REASON_LABELS[reason])
+    .join("; ");
+  throw new HttpsError(
+    "failed-precondition",
+    `No se puede continuar: ${explanation}.`,
+    {reasons: result.reasons, policyVersion: result.policyVersion}
+  );
+}
+
 export const applyToJob = onCall(async (request) => {
   const worker = await assertAuthenticated(request);
   const companyId = String(request.data?.companyId || "").trim();
@@ -620,10 +673,23 @@ export const applyToJob = onCall(async (request) => {
       return;
     }
 
+    const jobData = job.data() || {};
+    const credentials = await getActiveWorkerCredentials(
+      transaction,
+      worker.uid,
+      jobData
+    );
+    assertEligibleForJob({
+      company: company.data(),
+      job: jobData,
+      worker: workerProfile.data(),
+      credentials,
+    });
+
     const application = {
       jobId,
       companyId,
-      jobTitle: String(job.data()?.title || ""),
+      jobTitle: String(jobData.title || ""),
       companyName: String(company.data()?.name || ""),
       workerId: worker.uid,
       appliedAt: FieldValue.serverTimestamp(),
@@ -634,7 +700,7 @@ export const applyToJob = onCall(async (request) => {
       companyId,
       jobId,
       workerId: worker.uid,
-      jobTitle: String(job.data()?.title || ""),
+      jobTitle: String(jobData.title || ""),
       companyName: String(company.data()?.name || ""),
       source: "worker_application",
       state: "worker_interested",
@@ -695,6 +761,27 @@ export const inviteWorkerToJob = onCall(async (request) => {
     if (!worker.exists) {
       throw new HttpsError("not-found", "El trabajador ya no está disponible.");
     }
+    if (
+      existing.exists &&
+      existing.data()?.companyDecision === "interested" &&
+      !isTerminalMatchState(existing.data()?.state)
+    ) {
+      return;
+    }
+
+    const jobData = job.data() || {};
+    const credentials = await getActiveWorkerCredentials(
+      transaction,
+      workerId,
+      jobData
+    );
+    assertEligibleForJob({
+      company: company.data(),
+      job: jobData,
+      worker: worker.data(),
+      credentials,
+    });
+
     const workerDecision = existing.data()?.workerDecision || "pending";
     const state = workerDecision === "interested"
       ? "matched"
@@ -703,7 +790,7 @@ export const inviteWorkerToJob = onCall(async (request) => {
       companyId,
       jobId,
       workerId,
-      jobTitle: String(job.data()?.title || ""),
+      jobTitle: String(jobData.title || ""),
       companyName: String(company.data()?.name || ""),
       source: existing.data()?.source || "company_invitation",
       state,
@@ -834,23 +921,99 @@ export const respondToMatch = onCall(async (request) => {
 export const markMatchHired = onCall(async (request) => {
   const actor = await assertAuthenticated(request);
   const matchId = String(request.data?.matchId || "").trim();
+  if (!matchId) {
+    throw new HttpsError("invalid-argument", "Match inválido.");
+  }
+
   const matchRef = db.collection("matches").doc(matchId);
   const initialMatch = await matchRef.get();
   if (!initialMatch.exists) {
     throw new HttpsError("not-found", "El match no existe.");
   }
   const initialData = initialMatch.data() || {};
-  if (!(await hasCompanyAccess(actor.uid, initialData.companyId))) {
+  const companyId = String(initialData.companyId || "");
+  const jobId = String(initialData.jobId || "");
+  const workerId = String(initialData.workerId || "");
+  if (!companyId || !jobId || !workerId) {
+    throw new HttpsError("failed-precondition", "El match tiene datos incompletos.");
+  }
+  if (!(await hasCompanyAccess(actor.uid, companyId))) {
     throw new HttpsError("permission-denied", "No representas a esta empresa.");
   }
-  await db.runTransaction(async (transaction) => {
-    const match = await transaction.get(matchRef);
-    if (!match.exists || match.data()?.state !== "matched") {
+
+  const companyRef = db.collection("companies").doc(companyId);
+  const jobRef = companyRef.collection("jobs").doc(jobId);
+  const workerRef = db.collection("workers").doc(workerId);
+  const publicJobRef = db.collection("publicJobs").doc(`${companyId}_${jobId}`);
+  const membershipRef = companyRef.collection("company_members").doc(actor.uid);
+  const transactionResult = await db.runTransaction(async (transaction) => {
+    const [match, company, job, worker, membership] = await Promise.all([
+      transaction.get(matchRef),
+      transaction.get(companyRef),
+      transaction.get(jobRef),
+      transaction.get(workerRef),
+      transaction.get(membershipRef),
+    ]);
+    if (!match.exists) {
+      throw new HttpsError("not-found", "El match no existe.");
+    }
+    const matchData = match.data() || {};
+    if (
+      matchData.companyId !== companyId ||
+      matchData.jobId !== jobId ||
+      matchData.workerId !== workerId
+    ) {
+      throw new HttpsError("failed-precondition", "El match cambió durante la operación.");
+    }
+    if (!hasActiveCompanyAuthority(membership.data(), company.data())) {
+      throw new HttpsError("permission-denied", "Tu acceso a la empresa ya no está activo.");
+    }
+    if (matchData.state === "hired") {
+      return {
+        alreadyHired: true,
+        jobClosed: job.data()?.jobStatus === "closed",
+      };
+    }
+    if (matchData.state !== "matched") {
       throw new HttpsError(
         "failed-precondition",
         "Solo un match confirmado puede marcarse como contratación."
       );
     }
+
+    if (!company.exists || !job.exists || !worker.exists) {
+      throw new HttpsError(
+        "failed-precondition",
+        "La empresa, oferta o perfil del trabajador ya no está disponible."
+      );
+    }
+    const jobData = job.data() || {};
+    const credentials = await getActiveWorkerCredentials(
+      transaction,
+      workerId,
+      jobData
+    );
+    assertEligibleForJob({
+      company: company.data(),
+      job: jobData,
+      worker: worker.data(),
+      credentials,
+    });
+
+    const workersNeeded = Number(jobData.workersNeeded);
+    const workersFilled = Number(jobData.workersFilled || 0);
+    if (!Number.isInteger(workersNeeded) || workersNeeded <= 0 ||
+        !Number.isInteger(workersFilled) || workersFilled < 0 ||
+        workersFilled >= workersNeeded) {
+      throw new HttpsError(
+        "failed-precondition",
+        "La oferta no tiene cupos disponibles.",
+        {reasons: ["job_full"], policyVersion: 1}
+      );
+    }
+
+    const nextWorkersFilled = workersFilled + 1;
+    const jobClosed = nextWorkersFilled >= workersNeeded;
     transaction.update(matchRef, {
       state: "hired",
       hiredAt: FieldValue.serverTimestamp(),
@@ -858,6 +1021,26 @@ export const markMatchHired = onCall(async (request) => {
       lastActionBy: "company",
       lastActionByUid: actor.uid,
     });
+    transaction.update(jobRef, {
+      workersFilled: nextWorkersFilled,
+      ...(jobClosed ? {
+        jobStatus: "closed",
+        isActive: false,
+        publishPublic: false,
+        closedReason: "capacity_filled",
+        closedAt: FieldValue.serverTimestamp(),
+      } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    if (jobClosed) {
+      transaction.delete(publicJobRef);
+    } else {
+      transaction.set(publicJobRef, {
+        workersFilled: nextWorkersFilled,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+    }
+
     const applicationUpdate = {
       status: "hired",
       hiredAt: FieldValue.serverTimestamp(),
@@ -866,20 +1049,144 @@ export const markMatchHired = onCall(async (request) => {
       updatedAt: FieldValue.serverTimestamp(),
     };
     transaction.set(
-      db.collection("workers").doc(initialData.workerId)
-        .collection("applications").doc(`${initialData.companyId}_${initialData.jobId}`),
+      workerRef.collection("applications").doc(`${companyId}_${jobId}`),
       applicationUpdate,
       {merge: true}
     );
     transaction.set(
-      db.collection("companies").doc(initialData.companyId)
-        .collection("jobs").doc(initialData.jobId)
-        .collection("applications").doc(initialData.workerId),
+      jobRef.collection("applications").doc(workerId),
       applicationUpdate,
       {merge: true}
     );
+    return {alreadyHired: false, jobClosed};
   });
-  return {ok: true, matchId, state: "hired"};
+  return {ok: true, matchId, state: "hired", ...transactionResult};
+});
+
+const OPERATIONAL_MATCH_STATES = new Set([
+  "worker_interested",
+  "company_interested",
+  "matched",
+]);
+
+export const closeJob = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const companyId = String(request.data?.companyId || "").trim();
+  const jobId = String(request.data?.jobId || "").trim();
+  const reason = String(request.data?.reason || "closed_by_company")
+    .trim()
+    .slice(0, 120) || "closed_by_company";
+  if (!companyId || !jobId) {
+    throw new HttpsError("invalid-argument", "Oferta inválida.");
+  }
+  if (!(await hasCompanyAccess(actor.uid, companyId))) {
+    throw new HttpsError("permission-denied", "No representas a esta empresa.");
+  }
+
+  const companyRef = db.collection("companies").doc(companyId);
+  const jobRef = companyRef.collection("jobs").doc(jobId);
+  const publicJobRef = db.collection("publicJobs").doc(`${companyId}_${jobId}`);
+  const membershipRef = companyRef.collection("company_members").doc(actor.uid);
+  const auditRef = db.collection("admin_audit").doc();
+  const closeResult = await db.runTransaction(async (transaction) => {
+    const [company, membership, job] = await Promise.all([
+      transaction.get(companyRef),
+      transaction.get(membershipRef),
+      transaction.get(jobRef),
+    ]);
+    if (!hasActiveCompanyAuthority(membership.data(), company.data())) {
+      throw new HttpsError("permission-denied", "Tu acceso a la empresa ya no está activo.");
+    }
+    if (!job.exists) {
+      throw new HttpsError("not-found", "La oferta no existe.");
+    }
+    const alreadyClosed = job.data()?.jobStatus === "closed" &&
+      job.data()?.isActive === false;
+    if (!alreadyClosed) {
+      transaction.update(jobRef, {
+        jobStatus: "closed",
+        isActive: false,
+        publishPublic: false,
+        closedReason: reason,
+        closedAt: FieldValue.serverTimestamp(),
+        closedByUid: actor.uid,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      transaction.set(auditRef, {
+        action: "close_job",
+        companyId,
+        jobId,
+        reason,
+        performedByUid: actor.uid,
+        performedAt: FieldValue.serverTimestamp(),
+        schemaVersion: 1,
+      });
+    }
+    transaction.delete(publicJobRef);
+    return {alreadyClosed};
+  });
+
+  const matches = await db.collection("matches")
+    .where("companyId", "==", companyId)
+    .get();
+  const operationalMatches = matches.docs.filter((match) => {
+    const data = match.data();
+    return data.jobId === jobId && OPERATIONAL_MATCH_STATES.has(data.state);
+  });
+  for (let index = 0; index < operationalMatches.length; index += 100) {
+    const batch = db.batch();
+    operationalMatches.slice(index, index + 100).forEach((match) => {
+      const data = match.data();
+      const workerId = String(data.workerId || "").trim();
+      batch.update(match.ref, {
+        state: "closed",
+        closedReason: "job_closed",
+        closedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        lastActionBy: "company",
+        lastActionByUid: actor.uid,
+      });
+      batch.set(
+        companyRef.collection("contact_grants").doc(match.id),
+        {
+          status: "revoked",
+          revokedReason: "job_closed",
+          revokedAt: FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+      if (workerId) {
+        batch.set(
+          db.collection("workers").doc(workerId)
+            .collection("applications").doc(`${companyId}_${jobId}`),
+          {
+            status: "closed",
+            closedReason: "job_closed",
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          {merge: true}
+        );
+        batch.set(
+          jobRef.collection("applications").doc(workerId),
+          {
+            status: "closed",
+            closedReason: "job_closed",
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          {merge: true}
+        );
+      }
+    });
+    await batch.commit();
+  }
+
+  return {
+    ok: true,
+    companyId,
+    jobId,
+    closedMatches: operationalMatches.length,
+    ...closeResult,
+  };
 });
 
 export const getMatchContact = onCall(async (request) => {
@@ -1879,6 +2186,59 @@ async function closePublicJob(companyId: string, jobId: string) {
     { merge: true }
   );
 }
+
+function publicCompanyProjection(data: Record<string, unknown>) {
+  const projection: Record<string, unknown> = {
+    name: String(data.name || "").trim(),
+    logoUrl: typeof data.logoUrl === "string" ? data.logoUrl : null,
+    region: typeof data.region === "string" ? data.region : null,
+    status: "active",
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  if (typeof data.rubro === "string") projection.rubro = data.rubro;
+  if (typeof data.sector === "string") projection.sector = data.sector;
+  if (Array.isArray(data.sectors)) {
+    projection.sectors = data.sectors
+      .map((sector) => String(sector).trim())
+      .filter(Boolean)
+      .slice(0, 20);
+  }
+  if (typeof data.verified === "boolean") projection.verified = data.verified;
+  if (typeof data.verificationStatus === "string") {
+    projection.verificationStatus = data.verificationStatus;
+  }
+  return projection;
+}
+
+async function syncPublicCompany(
+  companyId: string,
+  data: Record<string, unknown>
+): Promise<void> {
+  const publicRef = db.collection("publicCompanies").doc(companyId);
+  if (data.isPublic !== true || data.status !== "active") {
+    await publicRef.delete();
+    return;
+  }
+  await publicRef.set(publicCompanyProjection(data));
+}
+
+export const onCompanyPublicSyncCreated = onDocumentCreated(
+  "companies/{companyId}",
+  async (event) => {
+    const company = event.data;
+    if (!company) return;
+    await syncPublicCompany(event.params.companyId, company.data());
+  }
+);
+
+export const onCompanyPublicSyncUpdated = onDocumentUpdated(
+  "companies/{companyId}",
+  async (event) => {
+    const company = event.data?.after;
+    if (!company) return;
+    await syncPublicCompany(event.params.companyId, company.data());
+  }
+);
 
 export const onJobPublicSyncCreated = onDocumentCreated(
   "companies/{companyId}/jobs/{jobId}",
