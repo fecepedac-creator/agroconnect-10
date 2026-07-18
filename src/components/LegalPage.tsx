@@ -17,7 +17,7 @@ export default function LegalPage({document}: Props) {
           <span className="text-sm font-black">MundoConnect</span>
         </div>
       </header>
-      <main className="mx-auto max-w-4xl px-5 py-12 sm:py-16">
+      <main id="main-content" tabIndex={-1} className="mx-auto max-w-4xl px-5 py-12 sm:py-16">
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-950 text-lime-300">
           {isTerms ? <FileCheck2 size={28} /> : <ShieldCheck size={28} />}
         </div>
@@ -54,4 +54,3 @@ export default function LegalPage({document}: Props) {
     </div>
   );
 }
-

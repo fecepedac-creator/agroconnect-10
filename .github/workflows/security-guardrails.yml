@@ -32,7 +32,13 @@ jobs:
             package-lock.json
             functions/package-lock.json
 
-      - name: Scan current tree and Git history
+      - name: Scan current tree on branch pushes
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: .\ops\security-scan.ps1 -SkipHistory
+
+      - name: Scan current tree and Git history before protected merges
+        if: github.event_name == 'pull_request'
         shell: pwsh
         run: .\ops\security-scan.ps1
 

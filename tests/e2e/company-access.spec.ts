@@ -20,9 +20,9 @@ test("empresa autorizada entra al portal compartido y ve ambos sectores", async 
 test("empresa no incorporada puede enviar una solicitud sin obtener acceso", async ({page}) => {
   await page.goto("/portal-empresas");
   await page.getByRole("button", {name: "Solicitar incorporación"}).click();
-  await page.getByPlaceholder("Nombre de la empresa").fill("Empresa Nueva E2E");
-  await page.getByPlaceholder("RUT de la empresa").fill("76.111.111-1");
-  await page.getByPlaceholder("Correo de contacto").fill("nueva@mundoconnect.test");
+  await page.getByLabel("Nombre de la empresa").fill("Empresa Nueva E2E");
+  await page.getByLabel("RUT de la empresa").fill("76.111.111-1");
+  await page.getByLabel("Correo de contacto").fill("nueva@mundoconnect.test");
   await page.getByRole("button", {name: "Enviar solicitud"}).click();
   await expect(page.getByText("Solicitud recibida")).toBeVisible();
   await expect(page.getByText(/no concede acceso automático/i)).not.toBeVisible();

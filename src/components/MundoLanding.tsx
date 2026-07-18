@@ -51,7 +51,7 @@ export default function MundoLanding() {
             <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-lime-300 text-emerald-950"><UsersRound size={24} /></span>
             <span>
               <span className="block text-xl font-black tracking-tight">Mundo<span className="text-lime-300">Connect</span></span>
-              <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-white/50">Personas y oportunidades</span>
+              <span className="block text-xs font-bold uppercase tracking-[0.2em] text-white/80">Personas y oportunidades</span>
             </span>
           </button>
           <nav className="hidden items-center gap-7 text-sm font-bold text-white/70 md:flex" aria-label="Navegación principal">
@@ -65,7 +65,7 @@ export default function MundoLanding() {
         </div>
       </header>
 
-      <main>
+      <main id="main-content" tabIndex={-1}>
         <section className="relative isolate overflow-hidden bg-slate-950 text-white">
           <div className="absolute inset-0 -z-30 grid grid-cols-2">
             <div className="bg-cover bg-center opacity-45" style={{backgroundImage: "url(/bg-left.jpg)"}} />
@@ -159,7 +159,7 @@ export default function MundoLanding() {
             <div className="mt-10 grid gap-5 md:grid-cols-3">
               {steps.map(({title, text, icon: Icon}, index) => (
                 <article key={title} className="rounded-3xl border border-slate-900/7 bg-[#f7f4ec] p-7">
-                  <div className="flex items-center justify-between"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-950 text-lime-300"><Icon size={23} /></span><span className="text-sm font-black text-slate-300">0{index + 1}</span></div>
+                  <div className="flex items-center justify-between"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-950 text-lime-300"><Icon size={23} /></span><span className="text-sm font-black text-slate-600">0{index + 1}</span></div>
                   <h3 className="mt-7 text-xl font-black">{title}</h3><p className="mt-3 font-medium leading-relaxed text-slate-600">{text}</p>
                 </article>
               ))}
@@ -192,8 +192,8 @@ export default function MundoLanding() {
 
       <footer className="border-t border-white/10 bg-slate-950 text-white">
         <div className="mx-auto flex max-w-7xl flex-col gap-5 px-5 py-9 sm:flex-row sm:items-center sm:justify-between lg:px-8">
-          <div><p className="text-lg font-black">Mundo<span className="text-lime-300">Connect</span></p><p className="mt-1 text-sm font-semibold text-white/45">Personas y oportunidades, más cerca.</p></div>
-          <p className="max-w-xl text-sm font-medium leading-relaxed text-white/45">MundoConnect facilita el encuentro entre trabajadores y empresas. No actúa como empleador ni celebra contratos laborales por cuenta de sus usuarios.</p>
+          <div><p className="text-lg font-black">Mundo<span className="text-lime-300">Connect</span></p><p className="mt-1 text-sm font-semibold text-white/75">Personas y oportunidades, más cerca.</p></div>
+          <p className="max-w-xl text-sm font-medium leading-relaxed text-white/75">MundoConnect facilita el encuentro entre trabajadores y empresas. No actúa como empleador ni celebra contratos laborales por cuenta de sus usuarios.</p>
         </div>
       </footer>
     </div>

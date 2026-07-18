@@ -18,7 +18,7 @@ export default function ExpansionSectorLanding({sector}: Props) {
         </div>
       </header>
 
-      <main>
+      <main id="main-content" tabIndex={-1}>
         <section className="relative isolate overflow-hidden text-white" style={{background: sector.gradient}}>
           <div className="absolute -right-24 top-12 -z-10 h-[28rem] w-[28rem] rounded-full blur-3xl" style={{background: sector.glow}} />
           <div className="absolute inset-0 -z-10 opacity-[0.08]" style={{backgroundImage: "linear-gradient(rgba(255,255,255,.35) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.35) 1px, transparent 1px)", backgroundSize: "42px 42px"}} />

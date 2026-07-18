@@ -555,7 +555,7 @@ export default function AdminPanel(props: AdminPanelProps) {
   // --------- Firestore subscriptions ---------
   useEffect(() => {
     setLoadingCompanies(true);
-    const q = query(collection(db, "companies"), orderBy("createdAt", "desc"));
+    const q = query(collection(db, "companies"), orderBy("createdAt", "desc"), limit(100));
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -588,7 +588,7 @@ export default function AdminPanel(props: AdminPanelProps) {
   useEffect(() => {
     setLeadsLoading(true);
     setLeadsError(null);
-    const q = query(collection(db, "company_leads"), orderBy("createdAt", "desc"));
+    const q = query(collection(db, "company_leads"), orderBy("createdAt", "desc"), limit(100));
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -630,7 +630,7 @@ export default function AdminPanel(props: AdminPanelProps) {
   }, []);
 
   useEffect(() => {
-    const q = query(collection(db, "stats_monthly"), orderBy("ym", "asc"));
+    const q = query(collection(db, "stats_monthly"), orderBy("ym", "asc"), limit(36));
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -668,7 +668,7 @@ export default function AdminPanel(props: AdminPanelProps) {
 
   useEffect(() => {
     // Manual expenses (global)
-    const q = query(collection(db, "finops_manualExpenses"), orderBy("createdAt", "desc"));
+    const q = query(collection(db, "finops_manualExpenses"), orderBy("createdAt", "desc"), limit(100));
     const unsub = onSnapshot(
       q,
       (snap) => {

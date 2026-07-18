@@ -18,7 +18,12 @@ async function main() {
   }
 
   const errors = results.reduce((total, result) => total + result.errorCount, 0);
-  if (errors > 0) {
+  const warnings = results.reduce((total, result) => total + result.warningCount, 0);
+  const warningBudget = 45;
+  if (errors > 0 || warnings > warningBudget) {
+    if (warnings > warningBudget) {
+      console.error(`Functions lint warning budget exceeded: ${warnings} > ${warningBudget}`);
+    }
     process.exitCode = 1;
   }
 }

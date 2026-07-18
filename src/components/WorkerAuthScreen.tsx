@@ -212,7 +212,7 @@ export default function WorkerAuthScreen({
   };
 
   return (
-    <div className={[
+    <main id="main-content" tabIndex={-1} className={[
       "min-h-screen flex items-center justify-center p-4 sm:p-6",
       isAgriculture ? "bg-emerald-50" : "bg-slate-100",
     ].join(" ")}>
@@ -234,12 +234,14 @@ export default function WorkerAuthScreen({
           <div className="mt-6 grid grid-cols-2 gap-2 rounded-2xl bg-gray-100 p-1">
             <button
               onClick={() => changeMode("login")}
+              aria-pressed={mode === "login"}
               className={`min-h-11 rounded-xl text-sm font-extrabold ${mode === "login" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}
             >
               Ya tengo cuenta
             </button>
             <button
               onClick={() => changeMode("register")}
+              aria-pressed={mode === "register"}
               className={`min-h-11 rounded-xl text-sm font-extrabold ${mode === "register" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}
             >
               Crear cuenta
@@ -290,7 +292,7 @@ export default function WorkerAuthScreen({
                   <button type="button" onClick={handleGoogle} disabled={loading} className="min-h-14 w-full rounded-2xl border border-gray-300 bg-white text-base font-black text-gray-800">
                     Continuar con Google
                   </button>
-                  <div className="text-center text-sm font-bold text-gray-400">o usa tu correo</div>
+                  <div className="text-center text-sm font-bold text-gray-600">o usa tu correo</div>
                   <input value={fullName} onChange={(event) => setFullName(event.target.value.replace(/[^\p{L}\p{M}\s'-]/gu, ""))} className={inputClass} autoComplete="name" placeholder="Nombre y apellido" aria-label="Nombre y apellido" />
                   <input value={email} onChange={(event) => setEmail(event.target.value.toLowerCase())} className={inputClass} type="email" autoComplete="email" placeholder="Correo" aria-label="Correo" />
                   <div className="relative">
@@ -315,7 +317,7 @@ export default function WorkerAuthScreen({
                     <legend className="mb-3 text-base font-black text-gray-900">También me interesan</legend>
                     <div className="grid grid-cols-2 gap-3">
                       {(["agriculture", "security"] as EmploymentSector[]).map((item) => (
-                        <button key={item} type="button" onClick={() => toggleSector(item)} className={`min-h-14 rounded-2xl border-2 text-sm font-black ${sectors.includes(item) ? theme.selected : "border-gray-200 text-gray-600"}`}>
+                        <button key={item} type="button" aria-pressed={sectors.includes(item)} onClick={() => toggleSector(item)} className={`min-h-14 rounded-2xl border-2 text-sm font-black ${sectors.includes(item) ? theme.selected : "border-gray-200 text-gray-600"}`}>
                           {item === "agriculture" ? "Agricultura" : "Seguridad"}
                         </button>
                       ))}
@@ -336,7 +338,7 @@ export default function WorkerAuthScreen({
                       ["public_transport", "Uso locomoción pública"],
                       ["own_transport", "Tengo transporte propio"],
                     ] as Array<[Mobility, string]>).map(([value, label]) => (
-                      <button key={value} type="button" onClick={() => setMobility(value)} className={`min-h-14 rounded-2xl border-2 px-4 text-left text-base font-black ${mobility === value ? theme.selected : "border-gray-200 text-gray-700"}`}>
+                      <button key={value} type="button" aria-pressed={mobility === value} onClick={() => setMobility(value)} className={`min-h-14 rounded-2xl border-2 px-4 text-left text-base font-black ${mobility === value ? theme.selected : "border-gray-200 text-gray-700"}`}>
                         {label}
                       </button>
                     ))}
@@ -377,10 +379,10 @@ export default function WorkerAuthScreen({
             </form>
           )}
 
-          {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{error}</div>}
-          {success && <div className={`mt-5 rounded-xl border p-4 text-sm font-semibold ${theme.soft}`}>{success}</div>}
+          {error && <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{error}</div>}
+          {success && <div role="status" aria-live="polite" className={`mt-5 rounded-xl border p-4 text-sm font-semibold ${theme.soft}`}>{success}</div>}
         </div>
       </div>
-    </div>
+    </main>
   );
 }

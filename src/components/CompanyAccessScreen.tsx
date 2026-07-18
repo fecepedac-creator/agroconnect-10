@@ -106,7 +106,7 @@ export default function CompanyAccessScreen({onAuthorized, onRegisterLead}: Prop
         <span className="rounded-full border border-white/15 px-4 py-2 text-xs font-black uppercase tracking-[0.14em] text-white/55">Portal protegido</span>
       </header>
 
-      <main className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-6xl items-center gap-12 px-5 py-12 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
+      <main id="main-content" tabIndex={-1} className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-6xl items-center gap-12 px-5 py-12 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
         <section>
           <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-300 text-slate-950"><Building2 size={28} /></span>
           <p className="mt-7 text-xs font-black uppercase tracking-[0.18em] text-amber-300">Administradores de empresas</p>
@@ -143,9 +143,9 @@ export default function CompanyAccessScreen({onAuthorized, onRegisterLead}: Prop
               <h2 className="text-2xl font-black">Solicitar incorporación</h2>
               <p className="mt-2 text-sm font-medium text-slate-500">Enviar una solicitud no concede acceso automático.</p>
               <div className="mt-6 space-y-4">
-                <input value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Nombre de la empresa" className="min-h-12 w-full rounded-2xl border border-slate-200 px-4" />
-                <input value={rut} onChange={(event) => setRut(event.target.value)} placeholder="RUT de la empresa" className="min-h-12 w-full rounded-2xl border border-slate-200 px-4" />
-                <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Correo de contacto" type="email" className="min-h-12 w-full rounded-2xl border border-slate-200 px-4" />
+                <label className="block text-sm font-bold text-slate-700">Nombre de la empresa<input value={companyName} onChange={(event) => setCompanyName(event.target.value)} autoComplete="organization" className="mt-2 min-h-12 w-full rounded-2xl border border-slate-300 px-4" /></label>
+                <label className="block text-sm font-bold text-slate-700">RUT de la empresa<input value={rut} onChange={(event) => setRut(event.target.value)} className="mt-2 min-h-12 w-full rounded-2xl border border-slate-300 px-4" /></label>
+                <label className="block text-sm font-bold text-slate-700">Correo de contacto<input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" type="email" className="mt-2 min-h-12 w-full rounded-2xl border border-slate-300 px-4" /></label>
               </div>
               {error && <div role="alert" className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{error}</div>}
               <button onClick={handleRequest} disabled={requesting} className="mt-6 min-h-14 w-full rounded-2xl bg-emerald-800 px-6 font-black text-white disabled:opacity-60">{requesting ? "Enviando..." : "Enviar solicitud"}</button>

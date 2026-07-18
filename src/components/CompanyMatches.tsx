@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from "react";
-import {collection, onSnapshot, orderBy, query, where} from "firebase/firestore";
+import {collection, limit, onSnapshot, orderBy, query, where} from "firebase/firestore";
 import {httpsCallable} from "firebase/functions";
 import {Award, Briefcase, CheckCircle2, ExternalLink, Lock, Mail, Phone, Star, UserCheck, XCircle} from "lucide-react";
 import {auth, db, functions} from "../firebase";
@@ -65,7 +65,7 @@ const CompanyMatches: React.FC<{company: Company}> = ({company}) => {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    const matchesQuery = query(collection(db, "matches"), where("companyId", "==", company.id), orderBy("updatedAt", "desc"));
+    const matchesQuery = query(collection(db, "matches"), where("companyId", "==", company.id), orderBy("updatedAt", "desc"), limit(50));
     return onSnapshot(matchesQuery, (snapshot) => {
       setMatches(snapshot.docs.map((item) => ({id: item.id, ...(item.data() as Omit<MatchRecord, "id">)})));
     });
