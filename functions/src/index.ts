@@ -2328,15 +2328,7 @@ async function upsertPublicJob(companyId: string, jobId: string, data: any) {
 
 async function closePublicJob(companyId: string, jobId: string) {
   const publicRef = db.collection("publicJobs").doc(`${companyId}_${jobId}`);
-  await publicRef.set(
-    {
-      jobStatus: "closed",
-      isActive: false,
-      publishPublic: false,
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
+  await publicRef.delete();
 }
 
 function publicCompanyProjection(data: Record<string, unknown>) {
@@ -2379,7 +2371,9 @@ export const onCompanyPublicSyncCreated = onDocumentCreated(
   async (event) => {
     const company = event.data;
     if (!company) return;
-    await syncPublicCompany(event.params.companyId, company.data());
+    const data = company.data();
+    if (!data) return;
+    await syncPublicCompany(event.params.companyId, data);
   }
 );
 
@@ -2388,7 +2382,9 @@ export const onCompanyPublicSyncUpdated = onDocumentUpdated(
   async (event) => {
     const company = event.data?.after;
     if (!company) return;
-    await syncPublicCompany(event.params.companyId, company.data());
+    const data = company.data();
+    if (!data) return;
+    await syncPublicCompany(event.params.companyId, data);
   }
 );
 
