@@ -79,6 +79,7 @@ const App: React.FC = () => {
   // Data State
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [jobs, setJobs] = useState<JobOffer[]>([]);
+  const [candidateSearchJobId, setCandidateSearchJobId] = useState("");
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companiesLoading, setCompaniesLoading] = useState(true);
   const [companiesError, setCompaniesError] = useState<string | null>(null);
@@ -111,6 +112,11 @@ const App: React.FC = () => {
   const [adminTab, setAdminTab] = useState<AdminTab>("OVERVIEW");
 
   const handleRadarClick = () => setCurrentView(AppView.GLOBAL_SEARCH);
+
+  const handleViewCandidates = (jobId: string) => {
+    setCandidateSearchJobId(jobId);
+    setCurrentView(AppView.GLOBAL_SEARCH);
+  };
   const isDemoMode = Boolean(adminConfig.demoMode);
 
   useEffect(() => {
@@ -690,11 +696,11 @@ const App: React.FC = () => {
                 placeholder="Selecciona una empresa para ver y gestionar sus ofertas."
               >
                 {currentCompany && (
-                  <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={() => setCurrentView(AppView.MATCHES)} />
+                  <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={handleViewCandidates} />
                 )}
               </CompanySelector>
             ) : currentCompany ? (
-              <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={() => setCurrentView(AppView.MATCHES)} />
+              <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={handleViewCandidates} />
             ) : (
               <div className="text-sm text-gray-500">Selecciona una empresa para ver las ofertas.</div>
             ))}
@@ -737,6 +743,7 @@ const App: React.FC = () => {
               isDemo={isDemoMode}
               currentCompany={currentCompany}
               jobs={jobs}
+              initialJobId={candidateSearchJobId}
             />
           )}
           {currentView === AppView.MATCHES && (

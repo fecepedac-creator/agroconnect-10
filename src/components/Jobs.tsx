@@ -8,7 +8,7 @@ interface JobsProps {
   jobs: JobOffer[];
   currentCompany: Company | null;
   onCreateOffer: () => void;
-  onViewCandidates: () => void;
+  onViewCandidates: (jobId: string) => void;
 }
 
 const Jobs: React.FC<JobsProps> = ({ jobs, currentCompany, onCreateOffer, onViewCandidates }) => {
@@ -55,7 +55,7 @@ const Jobs: React.FC<JobsProps> = ({ jobs, currentCompany, onCreateOffer, onView
                 <div className="mt-4 space-y-2 text-sm text-gray-600"><p className="flex items-center gap-2"><MapPin size={15} /> {job.location}</p>{job.sector === "agriculture" && <p className="flex items-center gap-2"><Bus size={15} /> {job.transportMode === "employer_transport" ? "Transporte proporcionado" : job.transportMode === "transport_allowance" ? "Asignación de transporte" : job.transportMode === "worker_own" ? "Traslado por cuenta del trabajador" : "Transporte por confirmar"}</p>}<p className="flex items-center gap-2"><Users size={15} /> {job.workersFilled} de {job.workersNeeded} cupos cubiertos</p></div>
                 <div className={`mt-4 rounded-xl px-3 py-2 text-sm font-bold ${remaining > 0 ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>{remaining > 0 ? `${remaining} cupos por cubrir` : "Cupos cubiertos"}</div>
               </div>
-              <div className="flex gap-2 border-t border-gray-100 bg-gray-50 p-4"><button type="button" onClick={onViewCandidates} className="min-h-11 flex-1 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold text-gray-800 hover:border-emerald-300 hover:text-emerald-800">Ver candidatos</button><button type="button" onClick={() => void deleteJob(job.id)} aria-label={`Eliminar oferta ${job.title}`} className="min-h-11 min-w-11 rounded-xl text-gray-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="mx-auto" size={18} /></button></div>
+              <div className="flex gap-2 border-t border-gray-100 bg-gray-50 p-4"><button type="button" onClick={() => onViewCandidates(job.id)} className="min-h-11 flex-1 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold text-gray-800 hover:border-emerald-300 hover:text-emerald-800">Ver candidatos</button><button type="button" onClick={() => void deleteJob(job.id)} aria-label={`Eliminar oferta ${job.title}`} className="min-h-11 min-w-11 rounded-xl text-gray-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="mx-auto" size={18} /></button></div>
             </article>;
           })}
         </div>
