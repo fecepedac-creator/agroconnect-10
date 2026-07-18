@@ -60,6 +60,12 @@ export default async function globalSetup() {
     available: true,
     isAvailable: true,
     discoverable: true,
+    consent: {
+      version: "e2e-v1",
+      matching: true,
+      operationalMessages: true,
+      marketing: false,
+    },
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   };
