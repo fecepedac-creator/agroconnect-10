@@ -69,6 +69,7 @@ type WorkerMatch = {
   state?: string;
   companyDecision?: string;
   workerDecision?: string;
+  administrativeClosure?: boolean;
 };
 
 type MatchContact = {
@@ -726,7 +727,8 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
       return;
     }
 
-    const reviewableMatches = matches.filter((match) => ["hired", "closed"].includes(match.state || ""));
+    const reviewableMatches = matches.filter((match) => match.state === "completed" ||
+      (match.state === "closed" && match.administrativeClosure === true));
     const reviewableIds = new Set(reviewableMatches.map((match) => match.id));
     setReviewStates((current) => {
       const next: Record<string, ReviewState> = {};
@@ -828,6 +830,32 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
       setMatchContacts((current) => ({...current, [matchId]: data.contact || {}}));
     } catch (error: any) {
       setMatchNotice(error?.message || "No se pudo mostrar el contacto.");
+    }
+  };
+
+  const handleHireDecision = async (matchId: string, decision: "accept" | "reject") => {
+    if (actionBusy) return;
+    setMatchNotice(null);
+    setActionBusy(`hire-${matchId}`);
+    try {
+      await httpsCallable(functions, "respondToHireProposal")({matchId, decision});
+    } catch (error: any) {
+      setMatchNotice(error?.message || "No pudimos guardar tu respuesta de contratación.");
+    } finally {
+      setActionBusy("");
+    }
+  };
+
+  const handleCompletionDecision = async (matchId: string, decision: "confirm" | "dispute") => {
+    if (actionBusy) return;
+    setMatchNotice(null);
+    setActionBusy(`completion-${matchId}`);
+    try {
+      await httpsCallable(functions, "respondToCompletionProposal")({matchId, decision});
+    } catch (error: any) {
+      setMatchNotice(error?.message || "No pudimos guardar tu respuesta de finalización.");
+    } finally {
+      setActionBusy("");
     }
   };
 
@@ -936,12 +964,22 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
             <DataStateMessage status={applicationsResult.status} loadingMessage="Cargando tus postulaciones..." error={applicationsResult.error} onRetry={applicationsResult.retry} />
             <DataStateMessage status={matchesResult.status} loadingMessage="Cargando conexiones con empresas..." error={matchesResult.error} onRetry={matchesResult.retry} />
             {matches
-              .filter((match) => ["matched", "hired"].includes(String(match.state || "")))
+              .filter((match) => ["matched", "hire_proposed", "hired",
+                "completion_proposed", "completion_disputed", "completed"]
+                .includes(String(match.state || "")))
               .map((match) => {
                 const contact = matchContacts[match.id];
+                const stateText: Record<string, string> = {
+                  matched: "Ambos están interesados",
+                  hire_proposed: "La empresa propone contratarte",
+                  hired: "Contratación aceptada",
+                  completion_proposed: "La empresa propone finalizar el trabajo",
+                  completion_disputed: "Finalización en revisión",
+                  completed: "Trabajo finalizado por ambas partes",
+                };
                 return (
                   <div key={match.id} className="rounded-3xl border-2 border-emerald-300 bg-emerald-50 p-5">
-                    <div className="text-sm font-black uppercase tracking-wide text-emerald-800">Ambos están interesados</div>
+                    <div className="text-sm font-black uppercase tracking-wide text-emerald-800">{stateText[match.state || ""] || "Proceso laboral"}</div>
                     <div className="mt-2 text-xl font-black text-gray-900">{match.jobTitle || "Oferta de trabajo"}</div>
                     <div className="mt-1 text-base text-gray-700">{match.companyName || "Empresa"}</div>
                     <p className="mt-3 text-sm leading-relaxed text-emerald-900">La empresa también está interesada. Ya pueden coordinar los siguientes pasos.</p>
@@ -956,7 +994,28 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
                         {!contact.phone && !contact.email && <span>La empresa aún no ha informado un contacto.</span>}
                       </div>
                     )}
-                    {match.state === "hired" && (
+                    {match.state === "hire_proposed" && (
+                      <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                        <p className="text-sm font-black text-amber-950">¿Aceptas esta contratación?</p>
+                        <p className="mt-1 text-sm text-amber-900">Tu aceptación confirma el cupo. Puedes rechazar si no llegaron a un acuerdo.</p>
+                        <div className="mt-4 grid grid-cols-2 gap-3">
+                          <button disabled={Boolean(actionBusy)} aria-busy={actionBusy === `hire-${match.id}`} onClick={() => handleHireDecision(match.id, "reject")} className="min-h-12 rounded-2xl border border-gray-300 bg-white text-sm font-black disabled:opacity-50">Rechazar</button>
+                          <button disabled={Boolean(actionBusy)} aria-busy={actionBusy === `hire-${match.id}`} onClick={() => handleHireDecision(match.id, "accept")} className="min-h-12 rounded-2xl bg-emerald-700 text-sm font-black text-white disabled:opacity-50">{actionBusy === `hire-${match.id}` ? "Guardando..." : "Aceptar contratación"}</button>
+                        </div>
+                      </div>
+                    )}
+                    {match.state === "hired" && <p role="status" className="mt-5 rounded-2xl bg-white p-4 text-sm font-bold text-emerald-900">La contratación está confirmada. La empresa propondrá la finalización cuando termine el trabajo.</p>}
+                    {match.state === "completion_proposed" && (
+                      <div className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                        <p className="text-sm font-black text-blue-950">¿El trabajo terminó correctamente?</p>
+                        <div className="mt-4 grid grid-cols-2 gap-3">
+                          <button disabled={Boolean(actionBusy)} aria-busy={actionBusy === `completion-${match.id}`} onClick={() => handleCompletionDecision(match.id, "dispute")} className="min-h-12 rounded-2xl border border-gray-300 bg-white text-sm font-black disabled:opacity-50">Tengo un problema</button>
+                          <button disabled={Boolean(actionBusy)} aria-busy={actionBusy === `completion-${match.id}`} onClick={() => handleCompletionDecision(match.id, "confirm")} className="min-h-12 rounded-2xl bg-blue-900 text-sm font-black text-white disabled:opacity-50">{actionBusy === `completion-${match.id}` ? "Guardando..." : "Confirmar término"}</button>
+                        </div>
+                      </div>
+                    )}
+                    {match.state === "completion_disputed" && <p role="alert" className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-950">Informaste un problema con la finalización. La empresa debe revisarlo antes de volver a proponer el término.</p>}
+                    {match.state === "completed" && (
                       <div className="mt-5 border-t border-emerald-200 pt-5">
                         {!reviewStates[match.id] || reviewStates[match.id] === "loading" ? (
                           <p role="status" aria-live="polite" className="font-bold text-gray-700">Comprobando evaluacion...</p>

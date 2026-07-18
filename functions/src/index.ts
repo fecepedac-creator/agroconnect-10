@@ -9,11 +9,19 @@ import nodemailer from "nodemailer";
 import {createHash} from "node:crypto";
 import {isVerifiedGoogleIdentity} from "./authPolicy";
 import {
+  canProposeCompletion,
+  canProposeHire,
+  canRespondToCompletion,
+  canRespondToHire,
   canRespondToMatchState,
+  canReviewMatch,
   isSelfDeclaredCredentialType,
   isTerminalMatchState,
+  MATCH_STATES,
   nextMatchState,
+  parseCompletionDecision,
   parseCredentialDecision,
+  parseHireDecision,
   parseMatchDecision,
 } from "./matchPolicy";
 import {
@@ -33,6 +41,8 @@ import {
   type Transaction,
 } from "firebase-admin/firestore";
 import {evaluateEligibility, type EligibilityReason} from "./jobPolicy";
+
+export {upsertWorkerIdentity} from "./workerIdentity";
 
 admin.initializeApp();
 
@@ -918,128 +928,174 @@ export const respondToMatch = onCall(async (request) => {
   return {ok: true, matchId, state: nextState};
 });
 
-export const markMatchHired = onCall(async (request) => {
+async function proposeMatchHireHandler(request: any) {
   const actor = await assertAuthenticated(request);
   const matchId = String(request.data?.matchId || "").trim();
-  if (!matchId) {
-    throw new HttpsError("invalid-argument", "Match inválido.");
+  if (!matchId) throw new HttpsError("invalid-argument", "Match inválido.");
+
+  const matchRef = db.collection("matches").doc(matchId);
+  const initial = await matchRef.get();
+  if (!initial.exists) throw new HttpsError("not-found", "El match no existe.");
+  const companyId = String(initial.data()?.companyId || "");
+  if (!(await hasCompanyAccess(actor.uid, companyId))) {
+    throw new HttpsError("permission-denied", "No representas a esta empresa.");
+  }
+
+  const companyRef = db.collection("companies").doc(companyId);
+  const membershipRef = companyRef.collection("company_members").doc(actor.uid);
+  const auditRef = db.collection("admin_audit").doc();
+  const result = await db.runTransaction(async (transaction) => {
+    const [match, company, membership] = await Promise.all([
+      transaction.get(matchRef),
+      transaction.get(companyRef),
+      transaction.get(membershipRef),
+    ]);
+    if (!match.exists) throw new HttpsError("not-found", "El match no existe.");
+    const data = match.data() || {};
+    if (!hasActiveCompanyAuthority(membership.data(), company.data())) {
+      throw new HttpsError("permission-denied", "Tu acceso a la empresa ya no está activo.");
+    }
+    if (data.state === MATCH_STATES.HIRE_PROPOSED) return {alreadyProposed: true};
+    if ([MATCH_STATES.HIRED, MATCH_STATES.COMPLETION_PROPOSED,
+      MATCH_STATES.COMPLETION_DISPUTED, MATCH_STATES.COMPLETED].includes(data.state)) {
+      return {alreadyProposed: true, alreadyHired: true};
+    }
+    if (!canProposeHire(data.state)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Solo puedes proponer contratación cuando ambas partes están interesadas."
+      );
+    }
+    transaction.update(matchRef, {
+      state: MATCH_STATES.HIRE_PROPOSED,
+      hireProposedAt: FieldValue.serverTimestamp(),
+      hireProposedByUid: actor.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+      lastActionBy: "company",
+      lastActionByUid: actor.uid,
+    });
+    transaction.create(auditRef, {
+      action: "hire_proposed",
+      matchId,
+      companyId,
+      jobId: data.jobId,
+      workerId: data.workerId,
+      performedByUid: actor.uid,
+      performedAt: FieldValue.serverTimestamp(),
+      schemaVersion: 1,
+    });
+    return {alreadyProposed: false};
+  });
+  return {ok: true, matchId, state: MATCH_STATES.HIRE_PROPOSED, ...result};
+}
+
+export const proposeMatchHire = onCall(proposeMatchHireHandler);
+
+// Compatibilidad: el endpoint legado ahora solo propone y nunca consume cupos.
+export const markMatchHired = onCall(proposeMatchHireHandler);
+
+export const respondToHireProposal = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  const decision = parseHireDecision(request.data?.decision);
+  if (!matchId || !decision) {
+    throw new HttpsError("invalid-argument", "Respuesta de contratación inválida.");
   }
 
   const matchRef = db.collection("matches").doc(matchId);
-  const initialMatch = await matchRef.get();
-  if (!initialMatch.exists) {
-    throw new HttpsError("not-found", "El match no existe.");
+  const initial = await matchRef.get();
+  if (!initial.exists) throw new HttpsError("not-found", "El match no existe.");
+  const initialData = initial.data() || {};
+  if (initialData.workerId !== actor.uid) {
+    throw new HttpsError("permission-denied", "Solo el trabajador puede responder esta propuesta.");
   }
-  const initialData = initialMatch.data() || {};
   const companyId = String(initialData.companyId || "");
   const jobId = String(initialData.jobId || "");
   const workerId = String(initialData.workerId || "");
   if (!companyId || !jobId || !workerId) {
     throw new HttpsError("failed-precondition", "El match tiene datos incompletos.");
   }
-  if (!(await hasCompanyAccess(actor.uid, companyId))) {
-    throw new HttpsError("permission-denied", "No representas a esta empresa.");
-  }
 
   const companyRef = db.collection("companies").doc(companyId);
   const jobRef = companyRef.collection("jobs").doc(jobId);
   const workerRef = db.collection("workers").doc(workerId);
   const publicJobRef = db.collection("publicJobs").doc(`${companyId}_${jobId}`);
-  const membershipRef = companyRef.collection("company_members").doc(actor.uid);
-  const transactionResult = await db.runTransaction(async (transaction) => {
-    const [match, company, job, worker, membership] = await Promise.all([
+  const auditRef = db.collection("admin_audit").doc();
+  const result = await db.runTransaction(async (transaction) => {
+    const [match, company, job, worker] = await Promise.all([
       transaction.get(matchRef),
       transaction.get(companyRef),
       transaction.get(jobRef),
       transaction.get(workerRef),
-      transaction.get(membershipRef),
     ]);
-    if (!match.exists) {
-      throw new HttpsError("not-found", "El match no existe.");
+    if (!match.exists) throw new HttpsError("not-found", "El match no existe.");
+    const data = match.data() || {};
+    if (data.workerId !== actor.uid) {
+      throw new HttpsError("permission-denied", "Solo el trabajador puede responder esta propuesta.");
     }
-    const matchData = match.data() || {};
-    if (
-      matchData.companyId !== companyId ||
-      matchData.jobId !== jobId ||
-      matchData.workerId !== workerId
-    ) {
-      throw new HttpsError("failed-precondition", "El match cambió durante la operación.");
+    if (decision === "accept" && data.state === MATCH_STATES.HIRED) {
+      return {alreadyHandled: true, state: MATCH_STATES.HIRED,
+        jobClosed: job.data()?.jobStatus === "closed"};
     }
-    if (!hasActiveCompanyAuthority(membership.data(), company.data())) {
-      throw new HttpsError("permission-denied", "Tu acceso a la empresa ya no está activo.");
+    if (decision === "reject" && data.state === MATCH_STATES.HIRE_REJECTED) {
+      return {alreadyHandled: true, state: MATCH_STATES.HIRE_REJECTED};
     }
-    if (matchData.state === "hired") {
-      return {
-        alreadyHired: true,
-        jobClosed: job.data()?.jobStatus === "closed",
-      };
+    if (!canRespondToHire(data.state)) {
+      throw new HttpsError("failed-precondition", "La propuesta de contratación ya fue respondida.");
     }
-    if (matchData.state !== "matched") {
-      throw new HttpsError(
-        "failed-precondition",
-        "Solo un match confirmado puede marcarse como contratación."
-      );
+
+    if (decision === "reject") {
+      transaction.update(matchRef, {
+        state: MATCH_STATES.HIRE_REJECTED,
+        hireDecision: "rejected",
+        hireRespondedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        lastActionBy: "worker",
+        lastActionByUid: actor.uid,
+      });
+      transaction.create(auditRef, {
+        action: "hire_rejected", matchId, companyId, jobId, workerId,
+        performedByUid: actor.uid,
+        performedAt: FieldValue.serverTimestamp(), schemaVersion: 1,
+      });
+      return {alreadyHandled: false, state: MATCH_STATES.HIRE_REJECTED};
     }
 
     if (!company.exists || !job.exists || !worker.exists) {
-      throw new HttpsError(
-        "failed-precondition",
-        "La empresa, oferta o perfil del trabajador ya no está disponible."
-      );
+      throw new HttpsError("failed-precondition", "La empresa, oferta o perfil ya no está disponible.");
     }
     const jobData = job.data() || {};
-    const credentials = await getActiveWorkerCredentials(
-      transaction,
-      workerId,
-      jobData
-    );
-    assertEligibleForJob({
-      company: company.data(),
-      job: jobData,
-      worker: worker.data(),
-      credentials,
-    });
-
+    const credentials = await getActiveWorkerCredentials(transaction, workerId, jobData);
+    assertEligibleForJob({company: company.data(), job: jobData, worker: worker.data(), credentials});
     const workersNeeded = Number(jobData.workersNeeded);
     const workersFilled = Number(jobData.workersFilled || 0);
     if (!Number.isInteger(workersNeeded) || workersNeeded <= 0 ||
         !Number.isInteger(workersFilled) || workersFilled < 0 ||
         workersFilled >= workersNeeded) {
-      throw new HttpsError(
-        "failed-precondition",
-        "La oferta no tiene cupos disponibles.",
-        {reasons: ["job_full"], policyVersion: 1}
-      );
+      throw new HttpsError("failed-precondition", "La oferta no tiene cupos disponibles.",
+        {reasons: ["job_full"], policyVersion: 1});
     }
 
     const nextWorkersFilled = workersFilled + 1;
     const jobClosed = nextWorkersFilled >= workersNeeded;
     transaction.update(matchRef, {
-      state: "hired",
+      state: MATCH_STATES.HIRED,
+      hireDecision: "accepted",
       hiredAt: FieldValue.serverTimestamp(),
+      hireRespondedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
-      lastActionBy: "company",
+      lastActionBy: "worker",
       lastActionByUid: actor.uid,
     });
     transaction.update(jobRef, {
       workersFilled: nextWorkersFilled,
-      ...(jobClosed ? {
-        jobStatus: "closed",
-        isActive: false,
-        publishPublic: false,
-        closedReason: "capacity_filled",
-        closedAt: FieldValue.serverTimestamp(),
-      } : {}),
+      ...(jobClosed ? {jobStatus: "closed", isActive: false, publishPublic: false,
+        closedReason: "capacity_filled", closedAt: FieldValue.serverTimestamp()} : {}),
       updatedAt: FieldValue.serverTimestamp(),
     });
-    if (jobClosed) {
-      transaction.delete(publicJobRef);
-    } else {
-      transaction.set(publicJobRef, {
-        workersFilled: nextWorkersFilled,
-        updatedAt: FieldValue.serverTimestamp(),
-      }, {merge: true});
-    }
+    if (jobClosed) transaction.delete(publicJobRef);
+    else transaction.set(publicJobRef, {workersFilled: nextWorkersFilled,
+      updatedAt: FieldValue.serverTimestamp()}, {merge: true});
 
     const applicationUpdate = {
       status: "hired",
@@ -1048,25 +1104,111 @@ export const markMatchHired = onCall(async (request) => {
       decisionBy: actor.uid,
       updatedAt: FieldValue.serverTimestamp(),
     };
-    transaction.set(
-      workerRef.collection("applications").doc(`${companyId}_${jobId}`),
-      applicationUpdate,
-      {merge: true}
-    );
-    transaction.set(
-      jobRef.collection("applications").doc(workerId),
-      applicationUpdate,
-      {merge: true}
-    );
-    return {alreadyHired: false, jobClosed};
+    transaction.set(workerRef.collection("applications").doc(`${companyId}_${jobId}`),
+      applicationUpdate, {merge: true});
+    transaction.set(jobRef.collection("applications").doc(workerId), applicationUpdate, {merge: true});
+    transaction.create(auditRef, {
+      action: "hire_accepted", matchId, companyId, jobId, workerId,
+      performedByUid: actor.uid,
+      performedAt: FieldValue.serverTimestamp(), schemaVersion: 1,
+    });
+    return {alreadyHandled: false, state: MATCH_STATES.HIRED, jobClosed};
   });
-  return {ok: true, matchId, state: "hired", ...transactionResult};
+  return {ok: true, matchId, ...result};
 });
 
+export const proposeMatchCompletion = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  if (!matchId) throw new HttpsError("invalid-argument", "Match inválido.");
+  const matchRef = db.collection("matches").doc(matchId);
+  const initial = await matchRef.get();
+  if (!initial.exists) throw new HttpsError("not-found", "El match no existe.");
+  const companyId = String(initial.data()?.companyId || "");
+  if (!(await hasCompanyAccess(actor.uid, companyId))) {
+    throw new HttpsError("permission-denied", "No representas a esta empresa.");
+  }
+  const companyRef = db.collection("companies").doc(companyId);
+  const membershipRef = companyRef.collection("company_members").doc(actor.uid);
+  const auditRef = db.collection("admin_audit").doc();
+  const result = await db.runTransaction(async (transaction) => {
+    const [match, company, membership] = await Promise.all([
+      transaction.get(matchRef), transaction.get(companyRef), transaction.get(membershipRef),
+    ]);
+    if (!match.exists) throw new HttpsError("not-found", "El match no existe.");
+    const data = match.data() || {};
+    if (!hasActiveCompanyAuthority(membership.data(), company.data())) {
+      throw new HttpsError("permission-denied", "Tu acceso a la empresa ya no está activo.");
+    }
+    if (data.state === MATCH_STATES.COMPLETION_PROPOSED) return {alreadyProposed: true};
+    if (data.state === MATCH_STATES.COMPLETED) return {alreadyProposed: true, alreadyCompleted: true};
+    if (!canProposeCompletion(data.state)) {
+      throw new HttpsError("failed-precondition", "Solo un trabajo contratado puede finalizarse.");
+    }
+    transaction.update(matchRef, {
+      state: MATCH_STATES.COMPLETION_PROPOSED,
+      completionProposedAt: FieldValue.serverTimestamp(),
+      completionProposedByUid: actor.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+      lastActionBy: "company",
+      lastActionByUid: actor.uid,
+    });
+    transaction.create(auditRef, {
+      action: "completion_proposed", matchId, companyId,
+      jobId: data.jobId, workerId: data.workerId, performedByUid: actor.uid,
+      performedAt: FieldValue.serverTimestamp(), schemaVersion: 1,
+    });
+    return {alreadyProposed: false};
+  });
+  return {ok: true, matchId, state: MATCH_STATES.COMPLETION_PROPOSED, ...result};
+});
+
+export const respondToCompletionProposal = onCall(async (request) => {
+  const actor = await assertAuthenticated(request);
+  const matchId = String(request.data?.matchId || "").trim();
+  const decision = parseCompletionDecision(request.data?.decision);
+  if (!matchId || !decision) {
+    throw new HttpsError("invalid-argument", "Respuesta de finalización inválida.");
+  }
+  const matchRef = db.collection("matches").doc(matchId);
+  const auditRef = db.collection("admin_audit").doc();
+  const result = await db.runTransaction(async (transaction) => {
+    const match = await transaction.get(matchRef);
+    if (!match.exists) throw new HttpsError("not-found", "El match no existe.");
+    const data = match.data() || {};
+    if (data.workerId !== actor.uid) {
+      throw new HttpsError("permission-denied", "Solo el trabajador puede responder esta finalización.");
+    }
+    const targetState = decision === "confirm" ?
+      MATCH_STATES.COMPLETED : MATCH_STATES.COMPLETION_DISPUTED;
+    if (data.state === targetState) return {alreadyHandled: true, state: targetState};
+    if (!canRespondToCompletion(data.state)) {
+      throw new HttpsError("failed-precondition", "La propuesta de finalización ya fue respondida.");
+    }
+    transaction.update(matchRef, {
+      state: targetState,
+      completionDecision: decision,
+      completionRespondedAt: FieldValue.serverTimestamp(),
+      ...(decision === "confirm" ? {completedAt: FieldValue.serverTimestamp()} :
+        {completionDisputedAt: FieldValue.serverTimestamp()}),
+      updatedAt: FieldValue.serverTimestamp(),
+      lastActionBy: "worker",
+      lastActionByUid: actor.uid,
+    });
+    transaction.create(auditRef, {
+      action: decision === "confirm" ? "completion_confirmed" : "completion_disputed",
+      matchId, companyId: data.companyId, jobId: data.jobId, workerId: data.workerId,
+      performedByUid: actor.uid, performedAt: FieldValue.serverTimestamp(), schemaVersion: 1,
+    });
+    return {alreadyHandled: false, state: targetState};
+  });
+  return {ok: true, matchId, ...result};
+});
 const OPERATIONAL_MATCH_STATES = new Set([
   "worker_interested",
   "company_interested",
   "matched",
+  "hire_proposed",
 ]);
 
 export const closeJob = onCall(async (request) => {
@@ -1202,7 +1344,8 @@ export const getMatchContact = onCall(async (request) => {
   if (!workerIsActor && !companyIsActor) {
     throw new HttpsError("permission-denied", "No participas en este match.");
   }
-  if (!["matched", "hired"].includes(data.state)) {
+  if (!["matched", "hire_proposed", "hired", "completion_proposed",
+    "completion_disputed", "completed"].includes(data.state)) {
     throw new HttpsError(
       "failed-precondition",
       "El contacto se libera únicamente después del match."
@@ -1267,7 +1410,7 @@ export const submitMatchReview = onCall(async (request) => {
     throw new HttpsError("not-found", "El match no existe.");
   }
   const data = match.data() || {};
-  if (!["hired", "closed"].includes(data.state)) {
+  if (!canReviewMatch(data.state, data.administrativeClosure)) {
     throw new HttpsError(
       "failed-precondition",
       "La evaluación requiere un trabajo verificado."
@@ -1288,10 +1431,19 @@ export const submitMatchReview = onCall(async (request) => {
     .collection("match_reviews")
     .doc(matchId + "_" + counterpartSide);
   await db.runTransaction(async (transaction) => {
-    const [existing, counterpart] = await Promise.all([
+    const [currentMatch, existing, counterpart] = await Promise.all([
+      transaction.get(matchRef),
       transaction.get(reviewRef),
       transaction.get(counterpartRef),
     ]);
+    if (!currentMatch.exists ||
+        !canReviewMatch(currentMatch.data()?.state,
+          currentMatch.data()?.administrativeClosure)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "La evaluación requiere una finalización confirmada por ambas partes."
+      );
+    }
     if (existing.exists) {
       throw new HttpsError(
         "already-exists",
@@ -1667,7 +1819,7 @@ export const reviewSafetyReport = onCall(async (request) => {
   const allowedDecisions = ["resolve", "dismiss", "suspend_job", "suspend_company"];
 
   if (!reportId || !allowedDecisions.includes(decision) || resolutionNote.length < 5 || resolutionNote.length > 1000) {
-    throw new HttpsError("invalid-argument", "Indica una resoluciÃ³n vÃ¡lida.");
+    throw new HttpsError("invalid-argument", "Indica una resolución válida.");
   }
 
   const reportRef = db.collection("safety_reports").doc(reportId);
@@ -1738,13 +1890,13 @@ export const reviewDataDeletionRequest = onCall(async (request) => {
   const decision = String(request.data?.decision || "").trim();
   const resolutionNote = String(request.data?.resolutionNote || "").trim();
   if (!uid || !["complete", "reject"].includes(decision) || resolutionNote.length < 5 || resolutionNote.length > 1000) {
-    throw new HttpsError("invalid-argument", "Indica una resoluciÃ³n vÃ¡lida.");
+    throw new HttpsError("invalid-argument", "Indica una resolución válida.");
   }
 
   const deletionRef = db.collection("data_deletion_requests").doc(uid);
   const deletionRequest = await deletionRef.get();
   if (!deletionRequest.exists || deletionRequest.data()?.status !== "pending") {
-    throw new HttpsError("failed-precondition", "La solicitud no estÃ¡ pendiente.");
+    throw new HttpsError("failed-precondition", "La solicitud no está pendiente.");
   }
 
   if (decision === "reject") {
@@ -2934,4 +3086,3 @@ export const commsOutboxWatchdog = onSchedule("every 10 minutes", async () => {
   });
   await batch.commit();
 });
-

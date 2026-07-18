@@ -23,14 +23,25 @@ test("match completo libera contacto, contratacion y evaluaciones", async ({brow
   await expect(companyPage.getByText("Ambos están interesados")).toBeVisible();
   await companyPage.getByRole("button", {name: "Ver contacto"}).click();
   await expect(companyPage.getByText("+56911112222")).toBeVisible();
-  await companyPage.getByRole("button", {name: "Marcar como contratado"}).click();
+  await companyPage.getByRole("button", {name: "Proponer contratación"}).click();
+  await expect(companyPage.getByText("Esperando que el trabajador acepte o rechace la contratación.")).toBeVisible();
+
+  await workerPage.goto("/worker/postulaciones?sector=agriculture");
+  await expect(workerPage.getByText("La empresa propone contratarte")).toBeVisible();
+  await workerPage.getByRole("button", {name: "Aceptar contratación"}).click();
   await expect(companyPage.getByText("Contratado", {exact: true})).toBeVisible();
+  await companyPage.getByRole("button", {name: "Proponer finalización del trabajo"}).click();
+  await expect(workerPage.getByText("La empresa propone finalizar el trabajo")).toBeVisible();
+  await workerPage.getByRole("button", {name: "Tengo un problema"}).click();
+  await expect(companyPage.getByText("Finalización en revisión", {exact: true})).toBeVisible();
+  await companyPage.getByRole("button", {name: "Volver a proponer finalización"}).click();
+  await workerPage.getByRole("button", {name: "Confirmar término"}).click();
+  await expect(companyPage.getByText("Trabajo finalizado por ambas partes", {exact: true})).toBeVisible();
   await companyPage.getByRole("button", {name: "5 estrellas"}).click();
   await companyPage.getByRole("button", {name: "Enviar evaluacion"}).click();
   await expect(companyPage.getByText("Evaluacion registrada.")).toBeVisible();
 
-  await workerPage.goto("/worker/postulaciones?sector=agriculture");
-  await expect(workerPage.getByText(/Ambos están interesados/)).toBeVisible();
+  await expect(workerPage.getByText("Trabajo finalizado por ambas partes")).toBeVisible();
   await workerPage.getByRole("button", {name: "Ver datos de contacto"}).click();
   await expect(workerPage.getByText("empresa@mundoconnect.test")).toBeVisible();
   await workerPage.getByRole("button").filter({hasText: /^5/}).click();

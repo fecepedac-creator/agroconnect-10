@@ -1,11 +1,18 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  canProposeCompletion,
+  canProposeHire,
+  canRespondToCompletion,
+  canRespondToHire,
+  canReviewMatch,
   canRespondToMatchState,
   isSelfDeclaredCredentialType,
   isTerminalMatchState,
   nextMatchState,
   parseCredentialDecision,
+  parseCompletionDecision,
+  parseHireDecision,
   parseMatchDecision,
 } = require("../lib/matchPolicy.js");
 
@@ -20,6 +27,32 @@ test("treats declined and completed match states as terminal", () => {
   assert.equal(isTerminalMatchState("declined"), true);
   assert.equal(isTerminalMatchState("hired"), true);
   assert.equal(isTerminalMatchState("matched"), false);
+  assert.equal(isTerminalMatchState("hire_proposed"), true);
+  assert.equal(isTerminalMatchState("completion_proposed"), true);
+  assert.equal(isTerminalMatchState("completed"), true);
+});
+
+test("defines bilateral hiring transitions", () => {
+  assert.equal(canProposeHire("matched"), true);
+  assert.equal(canProposeHire("hired"), false);
+  assert.equal(canRespondToHire("hire_proposed"), true);
+  assert.equal(canRespondToHire("matched"), false);
+  assert.equal(parseHireDecision("accept"), "accept");
+  assert.equal(parseHireDecision("reject"), "reject");
+  assert.equal(parseHireDecision("yes"), null);
+});
+
+test("defines bilateral completion and review transitions", () => {
+  assert.equal(canProposeCompletion("hired"), true);
+  assert.equal(canProposeCompletion("completion_disputed"), true);
+  assert.equal(canRespondToCompletion("completion_proposed"), true);
+  assert.equal(parseCompletionDecision("confirm"), "confirm");
+  assert.equal(parseCompletionDecision("dispute"), "dispute");
+  assert.equal(parseCompletionDecision("done"), null);
+  assert.equal(canReviewMatch("completed", false), true);
+  assert.equal(canReviewMatch("closed", true), true);
+  assert.equal(canReviewMatch("closed", false), false);
+  assert.equal(canReviewMatch("hired", false), false);
 });
 
 test("accepts decisions only before mutual match", () => {

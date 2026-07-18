@@ -9,6 +9,11 @@ const COMPANY_EMAIL = "empresa@mundoconnect.test";
 const COMPANY_PASSWORD = "MundoConnect123!";
 const WORKER_EMAIL = "match.worker@mundoconnect.test";
 const WORKER_PASSWORD = "Trabajador123!";
+const CAPACITY_PASSWORD = "Capacity123!";
+const CAPACITY_EMAILS = [
+  "capacity.worker.0@mundoconnect.test",
+  "capacity.worker.1@mundoconnect.test",
+];
 
 async function idToken(email: string, password: string): Promise<string> {
   const response = await fetch(
@@ -71,6 +76,7 @@ test.describe.serial("integridad transaccional de ofertas", () => {
       "single_capacity_job",
       "manual_close_job",
       "ui_close_job",
+      "rejected_hire_job",
     ].forEach((jobId) => {
       batch.delete(db.collection("companies").doc(COMPANY_ID)
         .collection("jobs").doc(jobId));
@@ -83,6 +89,7 @@ test.describe.serial("integridad transaccional de ofertas", () => {
       "close_match_1",
       "close_match_2",
       "close_match_3",
+      "rejected_hire_match",
     ].forEach((matchId) => batch.delete(db.collection("matches").doc(matchId)));
     [
       "capacity_worker_0",
@@ -95,6 +102,14 @@ test.describe.serial("integridad transaccional de ofertas", () => {
     batch.delete(db.collection("companies").doc("public_projection_e2e"));
     batch.delete(db.collection("publicCompanies").doc("public_projection_e2e"));
     await batch.commit();
+    const auth = getAuth(app);
+    for (const email of CAPACITY_EMAILS) {
+      const user = await auth.getUserByEmail(email).catch(() => null);
+      if (user) {
+        await db.collection("workers").doc(user.uid).delete();
+        await auth.deleteUser(user.uid);
+      }
+    }
     await deleteApp(app);
   });
 
@@ -160,9 +175,19 @@ test.describe.serial("integridad transaccional de ofertas", () => {
     };
     await Promise.all([jobRef.set(baseJob), publicRef.set(baseJob)]);
 
+    const auth = getAuth(app);
     const matchIds = ["capacity_match_a", "capacity_match_b"];
+    const workerTokens: string[] = [];
     for (const [index, matchId] of matchIds.entries()) {
-      const workerId = `capacity_worker_${index}`;
+      const previous = await auth.getUserByEmail(CAPACITY_EMAILS[index]).catch(() => null);
+      if (previous) await auth.deleteUser(previous.uid);
+      const workerUser = await auth.createUser({
+        email: CAPACITY_EMAILS[index],
+        password: CAPACITY_PASSWORD,
+        emailVerified: true,
+      });
+      await auth.setCustomUserClaims(workerUser.uid, {role: "worker"});
+      const workerId = workerUser.uid;
       await db.collection("workers").doc(workerId).set({
         sectors: ["agriculture"],
         available: true,
@@ -177,11 +202,18 @@ test.describe.serial("integridad transaccional de ofertas", () => {
         workerDecision: "interested",
         companyDecision: "interested",
       });
+      workerTokens.push(await idToken(CAPACITY_EMAILS[index], CAPACITY_PASSWORD));
     }
 
-    const token = await idToken(COMPANY_EMAIL, COMPANY_PASSWORD);
-    const results = await Promise.all(matchIds.map((matchId) =>
-      callFunction("markMatchHired", token, {matchId})
+    const companyToken = await idToken(COMPANY_EMAIL, COMPANY_PASSWORD);
+    const proposals = await Promise.all(matchIds.map((matchId) =>
+      callFunction("markMatchHired", companyToken, {matchId})
+    ));
+    expect(proposals.every((result) => result.ok)).toBe(true);
+    expect((await jobRef.get()).data()?.workersFilled).toBe(0);
+
+    const results = await Promise.all(matchIds.map((matchId, index) =>
+      callFunction("respondToHireProposal", workerTokens[index], {matchId, decision: "accept"})
     ));
 
     expect(results.filter((result) => result.ok)).toHaveLength(1);
@@ -201,12 +233,52 @@ test.describe.serial("integridad transaccional de ofertas", () => {
     expect(matches.filter((match) => match.data()?.state === "hired")).toHaveLength(1);
 
     const hiredIndex = matches.findIndex((match) => match.data()?.state === "hired");
-    const retry = await callFunction("markMatchHired", token, {
+    const retry = await callFunction("respondToHireProposal", workerTokens[hiredIndex], {
       matchId: matchIds[hiredIndex],
+      decision: "accept",
     });
     expect(retry.ok).toBe(true);
-    expect(retry.payload.result.alreadyHired).toBe(true);
+    expect(retry.payload.result.alreadyHandled).toBe(true);
     expect((await jobRef.get()).data()?.workersFilled).toBe(1);
+  });
+
+  test("rechazar contratacion no consume cupos", async () => {
+    const app = getApps().find((candidate) => candidate.name === "job-integrity")!;
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const worker = await auth.getUserByEmail(WORKER_EMAIL);
+    const jobId = "rejected_hire_job";
+    const matchId = "rejected_hire_match";
+    const jobRef = db.collection("companies").doc(COMPANY_ID).collection("jobs").doc(jobId);
+    await jobRef.set({companyId: COMPANY_ID, jobId, title: "Oferta rechazo bilateral",
+      sector: "agriculture", workersNeeded: 2, workersFilled: 0,
+      isActive: true, jobStatus: "active", publishPublic: true});
+    await db.collection("matches").doc(matchId).set({companyId: COMPANY_ID, jobId,
+      workerId: worker.uid, state: "matched", workerDecision: "interested",
+      companyDecision: "interested"});
+
+    const companyToken = await idToken(COMPANY_EMAIL, COMPANY_PASSWORD);
+    const workerToken = await idToken(WORKER_EMAIL, WORKER_PASSWORD);
+    expect((await callFunction("proposeMatchHire", companyToken, {matchId})).ok).toBe(true);
+    const proposalRetry = await callFunction("markMatchHired", companyToken, {matchId});
+    expect(proposalRetry.ok).toBe(true);
+    expect(proposalRetry.payload.result.alreadyProposed).toBe(true);
+    const rejection = await callFunction("respondToHireProposal", workerToken,
+      {matchId, decision: "reject"});
+    expect(rejection.ok).toBe(true);
+    const rejectionRetry = await callFunction("respondToHireProposal", workerToken,
+      {matchId, decision: "reject"});
+    expect(rejectionRetry.ok).toBe(true);
+    expect(rejectionRetry.payload.result.alreadyHandled).toBe(true);
+    expect((await db.collection("matches").doc(matchId).get()).data()?.state)
+      .toBe("hire_rejected");
+    expect((await jobRef.get()).data()?.workersFilled).toBe(0);
+    expect((await db.collection("workers").doc(worker.uid).collection("applications")
+      .doc(`${COMPANY_ID}_${jobId}`).get()).exists).toBe(false);
+    const earlyReview = await callFunction("submitMatchReview", companyToken,
+      {matchId, overall: 5});
+    expect(earlyReview.ok).toBe(false);
+    expect(earlyReview.payload.error.status).toBe("FAILED_PRECONDITION");
   });
 
   test("cierra oferta sin borrarla, retira publicacion y clausura procesos", async () => {
