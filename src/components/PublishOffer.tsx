@@ -23,6 +23,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   Wand2,
+  Bus,
+  ShieldCheck,
 } from "lucide-react";
 import { db, functions } from "../firebase";
 import { AppView, Company, JobOffer } from "../types";
@@ -83,7 +85,15 @@ export default function PublishOffer({
   const [startDate, setStartDate] = useState("");
   const [duration, setDuration] = useState("");
   const [workersNeeded, setWorkersNeeded] = useState<number>(8);
-  const [publishPublic, setPublishPublic] = useState(false);
+  const [sector, setSector] = useState<JobOffer["sector"]>("agriculture");
+  const [category, setCategory] = useState("Cosecha");
+  const [transportMode, setTransportMode] = useState<JobOffer["transportMode"]>("pending");
+  const [pickupPoints, setPickupPoints] = useState("");
+  const [departureTime, setDepartureTime] = useState("");
+  const [shiftType, setShiftType] = useState<JobOffer["shiftType"]>("day");
+  const [shiftPattern, setShiftPattern] = useState("");
+  const [requiresOs10, setRequiresOs10] = useState(true);
+  const [facilityType, setFacilityType] = useState("");
 
   // Aptitudes (chips)
   const [skillsInput, setSkillsInput] = useState("");
@@ -177,7 +187,18 @@ export default function PublishOffer({
       skillsRequired,
       aiSeedNotes: aiSeedNotes?.trim() || undefined,
       aiGeneratedText: aiGeneratedText?.trim() || undefined,
-      publishPublic,
+      sector,
+      category,
+      transportMode: sector === "agriculture" ? transportMode : undefined,
+      pickupPoints: sector === "agriculture" ? pickupPoints.trim() : undefined,
+      departureTime: sector === "agriculture" ? departureTime : undefined,
+      benefits: { transport: sector === "agriculture" && transportMode === "employer_transport" },
+      shiftType: sector === "security" ? shiftType : undefined,
+      shiftPattern: sector === "security" ? shiftPattern.trim() : undefined,
+      requiresOs10: sector === "security" ? requiresOs10 : undefined,
+      facilityType: sector === "security" ? facilityType.trim() : undefined,
+      otherBenefits: duration.trim() ? `Duración: ${duration.trim()}` : undefined,
+      publishPublic: false,
       // Sin geocoding en frontend en esta etapa (evita cálculos/queries)
       coordinates: { lat: -35.426, lng: -71.666 },
     } as any;
@@ -242,7 +263,6 @@ export default function PublishOffer({
         ...(!jobId ? {createdAt: serverTimestamp()} : {}),
       } as any, {merge: true});
       if (!jobId) setJobId(targetRef.id);
-      setPublishPublic(true);
       setSavedOk(true);
     } catch (e: any) {
       setError(e?.message || "No se pudo publicar la oferta.");
@@ -366,16 +386,16 @@ export default function PublishOffer({
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-xs font-extrabold text-gray-500">Gestión de ofertas</div>
-          <div className="mt-1 text-2xl font-extrabold text-gray-900">Publicar nueva oferta de trabajo</div>
+          <div className="mt-1 text-2xl font-extrabold text-gray-900">Crear oferta de trabajo</div>
           <div className="mt-2 text-sm text-gray-600">
-            Datos mínimos → IA (opcional) → Afiche RRSS con vista previa → difusión por WhatsApp.
+            Completa las condiciones del trabajo, revisa la información y luego publica.
           </div>
         </div>
         <button
-          onClick={() => onNavigate(AppView.DASHBOARD)}
+          onClick={() => onNavigate(AppView.JOBS)}
           className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-extrabold text-gray-800 hover:bg-gray-50"
         >
-          Volver al resumen
+          Volver a ofertas
         </button>
       </div>
 
@@ -392,6 +412,21 @@ export default function PublishOffer({
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <div className="text-xs font-extrabold text-gray-500">Área de trabajo</div>
+                <div className="mt-2 grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => { setSector("agriculture"); setCategory("Cosecha"); }} className={`min-h-12 rounded-xl border-2 text-sm font-extrabold ${sector === "agriculture" ? "border-emerald-500 bg-emerald-50 text-emerald-900" : "border-gray-200 text-gray-600"}`}>Agricultura</button>
+                  <button type="button" onClick={() => { setSector("security"); setCategory("Guardia de seguridad"); }} className={`min-h-12 rounded-xl border-2 text-sm font-extrabold ${sector === "security" ? "border-blue-800 bg-blue-50 text-blue-950" : "border-gray-200 text-gray-600"}`}>Seguridad</button>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs font-extrabold text-gray-500">Tipo de labor</div>
+                <select value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 min-h-11 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 text-sm font-semibold">
+                  {(sector === "security" ? ["Guardia de seguridad", "Control de acceso", "Rondín", "Supervisor", "Otros"] : ["Cosecha", "Packing", "Poda", "Maquinaria", "Otros"]).map((item) => <option key={item}>{item}</option>)}
+                </select>
+              </div>
+
               <div>
                 <div className="text-xs font-extrabold text-gray-500">Puesto de trabajo</div>
                 <input
@@ -472,19 +507,8 @@ export default function PublishOffer({
                 </div>
               </div>
 
-              <div className="md:col-span-2">
-                <div className="mt-1 flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-3">
-                  <div>
-                    <div className="text-xs font-extrabold text-gray-500">Publicar en directorio público</div>
-                    <div className="text-[11px] text-gray-500">La oferta será visible para trabajadores sin iniciar sesión.</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={publishPublic}
-                    onChange={(e) => setPublishPublic(e.target.checked)}
-                    className="h-5 w-5 accent-emerald-600"
-                  />
-                </div>
+              <div className="md:col-span-2 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                Guardar borrador mantiene la oferta privada. Al presionar Publicar oferta será visible para trabajadores.
               </div>
 
               <div>
@@ -496,6 +520,19 @@ export default function PublishOffer({
                   className="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-900 outline-none focus:ring-2 focus:ring-emerald-200"
                 />
               </div>
+
+              {sector === "agriculture" ? (
+                <div className="space-y-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 md:col-span-2">
+                  <h3 className="flex items-center gap-2 font-extrabold text-emerald-950"><Bus size={18} /> Transporte</h3>
+                  <label className="block text-xs font-bold text-emerald-900">¿Cómo llegan los trabajadores?<select value={transportMode} onChange={(event) => setTransportMode(event.target.value as JobOffer["transportMode"])} className="mt-1 min-h-11 w-full rounded-xl border border-emerald-200 bg-white px-3 text-sm"><option value="pending">Por confirmar</option><option value="employer_transport">La empresa proporciona transporte</option><option value="transport_allowance">Asignación de movilización</option><option value="worker_own">Cada trabajador llega por sus medios</option></select></label>
+                  {transportMode === "employer_transport" && <div className="grid gap-3 md:grid-cols-2"><input value={pickupPoints} onChange={(event) => setPickupPoints(event.target.value)} placeholder="Puntos de encuentro o recorrido" className="min-h-11 rounded-xl border border-emerald-200 px-3 text-sm md:col-span-2" /><label className="text-xs font-bold text-emerald-900">Hora de salida<input type="time" value={departureTime} onChange={(event) => setDepartureTime(event.target.value)} className="mt-1 min-h-11 w-full rounded-xl border border-emerald-200 px-3" /></label></div>}
+                </div>
+              ) : (
+                <div className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 md:col-span-2">
+                  <h3 className="flex items-center gap-2 font-extrabold text-blue-950"><ShieldCheck size={18} /> Condiciones de seguridad</h3>
+                  <div className="grid gap-3 md:grid-cols-2"><label className="text-xs font-bold text-blue-950">Turno<select value={shiftType} onChange={(event) => setShiftType(event.target.value as JobOffer["shiftType"])} className="mt-1 min-h-11 w-full rounded-xl border border-blue-200 bg-white px-3 text-sm"><option value="day">Día</option><option value="night">Noche</option><option value="rotating">Rotativo</option></select></label><label className="text-xs font-bold text-blue-950">Modalidad<input value={shiftPattern} onChange={(event) => setShiftPattern(event.target.value)} placeholder="Ej: 4x4" className="mt-1 min-h-11 w-full rounded-xl border border-blue-200 px-3 text-sm" /></label><label className="text-xs font-bold text-blue-950 md:col-span-2">Tipo de instalación<input value={facilityType} onChange={(event) => setFacilityType(event.target.value)} placeholder="Ej: condominio, bodega o planta" className="mt-1 min-h-11 w-full rounded-xl border border-blue-200 px-3 text-sm" /></label><label className="flex min-h-11 items-center gap-3 rounded-xl bg-white px-3 text-sm font-bold text-blue-950 md:col-span-2"><input type="checkbox" checked={requiresOs10} onChange={(event) => setRequiresOs10(event.target.checked)} className="h-5 w-5 accent-blue-900" /> Requiere OS10 vigente</label></div>
+                </div>
+              )}
 
               <div>
                 <div className="text-xs font-extrabold text-gray-500">Cupos</div>
@@ -734,32 +771,32 @@ export default function PublishOffer({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2">
-                  <a
-                    href={activePoster?.assets?.postUrl || "#"}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {activePoster?.assets?.postUrl && <a
+                    href={activePoster.assets.postUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className={cx("rounded-xl border px-3 py-2 text-center text-xs font-extrabold", activePoster?.assets?.postUrl ? "border-gray-200 bg-white text-gray-800 hover:bg-gray-50" : "border-gray-200 bg-gray-100 text-gray-400 pointer-events-none")}
+                    className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-center text-xs font-extrabold text-gray-800 hover:bg-gray-50"
                   >
                     Descargar Post
-                  </a>
-                  <a
-                    href={activePoster?.assets?.storyUrl || "#"}
+                  </a>}
+                  {activePoster?.assets?.storyUrl && <a
+                    href={activePoster.assets.storyUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className={cx("rounded-xl border px-3 py-2 text-center text-xs font-extrabold", activePoster?.assets?.storyUrl ? "border-gray-200 bg-white text-gray-800 hover:bg-gray-50" : "border-gray-200 bg-gray-100 text-gray-400 pointer-events-none")}
+                    className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-center text-xs font-extrabold text-gray-800 hover:bg-gray-50"
                   >
                     Descargar Story
-                  </a>
-                  <button
+                  </a>}
+                  {jobId && <button
                     onClick={() => {
-                      const link = jobId ? `${window.location.origin}/?job=${jobId}` : window.location.origin;
+                      const link = `${window.location.origin}/trabajos/${jobId}?sector=${sector === "security" ? "security" : "agriculture"}`;
                       navigator.clipboard?.writeText(link);
                     }}
                     className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-center text-xs font-extrabold text-gray-800 hover:bg-gray-50"
                   >
                     Copiar enlace
-                  </button>
+                  </button>}
                 </div>
 
                 {posters.length > 0 ? (
@@ -796,21 +833,7 @@ export default function PublishOffer({
             </div>
           </div>
 
-          <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-            <div className="text-sm font-extrabold text-gray-900">Difusión rápida (WhatsApp)</div>
-            <div className="mt-2 text-sm text-gray-600">
-              Selecciona trabajadores (cercanía, historial y aptitudes) y envía el mensaje instantáneo.
-            </div>
-            <button
-              onClick={() => onNavigate(AppView.WORKERS)}
-              className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2 text-sm font-extrabold text-white hover:bg-emerald-700"
-            >
-              Seleccionar trabajadores (WhatsApp)
-            </button>
-            <div className="mt-2 text-xs font-semibold text-gray-500">
-              El envío real queda en <span className="font-extrabold">comms_outbox</span> (backend).
-            </div>
-          </div>
+          {jobId && <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm"><div className="text-sm font-extrabold text-gray-900">Difusión opcional</div><p className="mt-2 text-sm text-gray-600">Después de publicar, prepara un mensaje y compártelo manualmente desde la sección Difundir oferta.</p><button type="button" onClick={() => onNavigate(AppView.BROADCASTS)} className="mt-4 min-h-11 w-full rounded-xl border border-emerald-300 px-4 text-sm font-extrabold text-emerald-800 hover:bg-emerald-50">Ir a difusión</button></div>}
         </div>
       </div>
     </div>

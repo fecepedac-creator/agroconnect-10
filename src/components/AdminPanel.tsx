@@ -1252,9 +1252,9 @@ export default function AdminPanel(props: AdminPanelProps) {
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
               <div className="text-xs font-semibold text-gray-500">SUPERADMIN</div>
-              <div className="text-2xl font-extrabold text-gray-900">Dashboard Global</div>
+              <div className="text-2xl font-extrabold text-gray-900">Resumen global</div>
               <div className="text-sm text-gray-600">
-                Visión ejecutiva, actividad de plataforma y FinOps. Fuente: Firestore + agregados <Badge>stats/*</Badge>
+                Estado operativo, actividad de plataforma y control de costos. Fuente: Firestore + agregados <Badge>stats/*</Badge>
               </div>
             </div>
 
@@ -1297,7 +1297,7 @@ export default function AdminPanel(props: AdminPanelProps) {
             }
           />
           <KpiCard
-            title="Jobs totales"
+            title="Ofertas totales"
             value={effectiveGlobal.jobsTotal}
             subtitle={
               <span className="flex gap-2 flex-wrap">
@@ -1323,9 +1323,9 @@ export default function AdminPanel(props: AdminPanelProps) {
             value={`${placementRate}%`}
             subtitle={
               <span className="flex gap-2 flex-wrap">
-                <span>Hires: <b>{effectiveGlobal.hiresTotal}</b></span>
-                <span>Apps: <b>{effectiveGlobal.applicationsTotal}</b></span>
-                <span>Matches: <b>{effectiveGlobal.matchesConfirmed}</b></span>
+                <span>Contrataciones: <b>{effectiveGlobal.hiresTotal}</b></span>
+                <span>Postulaciones: <b>{effectiveGlobal.applicationsTotal}</b></span>
+                <span>Interés mutuo: <b>{effectiveGlobal.matchesConfirmed}</b></span>
               </span>
             }
           />
@@ -1339,7 +1339,7 @@ export default function AdminPanel(props: AdminPanelProps) {
               <Badge>Mensual</Badge>
             </div>
             <div className="mt-3 text-sm text-gray-600">
-              Jobs y postulaciones por mes (desde <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">stats_monthly</code>).
+              Ofertas y postulaciones por mes (desde <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">stats_monthly</code>).
             </div>
 
             <div className="mt-4 overflow-x-auto">
@@ -1347,7 +1347,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                 <thead className="text-xs uppercase text-gray-500 bg-gray-50">
                   <tr>
                     <th className="p-3">Mes</th>
-                    <th className="p-3">Jobs</th>
+                    <th className="p-3">Ofertas</th>
                     <th className="p-3">Postulaciones</th>
                     <th className="p-3">Contrataciones</th>
                   </tr>
@@ -1387,7 +1387,7 @@ export default function AdminPanel(props: AdminPanelProps) {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
-              <div className="text-lg font-semibold text-gray-900">FinOps</div>
+              <div className="text-lg font-semibold text-gray-900">Costos de operación</div>
               <div className="text-sm text-gray-600">
                 Costos automáticos (estimados) + costos manuales (operacionales). Preparado para integrar Google Cloud Billing.
               </div>
@@ -2348,7 +2348,7 @@ export default function AdminPanel(props: AdminPanelProps) {
                 )}
               </div>
               <div className="text-sm text-gray-600">
-                Administración global · métricas · actividad · FinOps
+                Administración global · seguridad · empresas · costos
               </div>
             </div>
           </div>
@@ -2384,7 +2384,7 @@ export default function AdminPanel(props: AdminPanelProps) {
 
       {/* Tabs */}
       <div className="mx-auto max-w-7xl px-4 py-4">
-        <div className="inline-flex rounded-2xl border border-emerald-100 bg-white/90 p-1 shadow-sm">
+        <div className="flex max-w-full gap-1 overflow-x-auto rounded-2xl border border-emerald-100 bg-white/90 p-1 shadow-sm" aria-label="Secciones de SuperAdmin">
           <button
             onClick={() => setActiveTab("OVERVIEW")}
             className={
@@ -2392,7 +2392,7 @@ export default function AdminPanel(props: AdminPanelProps) {
               (activeTab === "OVERVIEW" ? "bg-emerald-600 text-white shadow" : "text-gray-700 hover:bg-emerald-50")
             }
           >
-            Dashboard
+            Resumen
           </button>
           <button
             onClick={() => setActiveTab("COMPANIES")}
@@ -2419,7 +2419,7 @@ export default function AdminPanel(props: AdminPanelProps) {
               (activeTab === "TRUST" ? "bg-emerald-600 text-white shadow" : "text-gray-700 hover:bg-emerald-50")
             }
           >
-            Confianza
+            Seguridad y confianza
           </button>
           <button
             onClick={() => setActiveTab("SETTINGS")}

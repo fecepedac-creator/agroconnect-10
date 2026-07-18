@@ -28,6 +28,7 @@ import WorkerProfileEditor, {type EditableWorkerProfile} from "./WorkerProfileEd
 import WorkerCredentialsPanel from "./WorkerCredentialsPanel";
 import type { JobOffer } from "../types";
 import {SECTOR_EXPERIENCES, sectorQuery, type EmploymentSector} from "../sectorExperience";
+import {getSectorTheme} from "../sectorTheme";
 
 type WorkerPortalProps = {
   onExit?: () => void;
@@ -61,6 +62,8 @@ type WorkerApplication = {
 
 type WorkerMatch = {
   id: string;
+  jobId?: string;
+  companyId?: string;
   jobTitle?: string;
   companyName?: string;
   state?: string;
@@ -254,40 +257,42 @@ const SectorBrand = ({sector}: {sector: EmploymentSector}) => {
   );
 };
 
-const PublicLayout = ({ children, onAuthClick, sector }: { children: React.ReactNode; onAuthClick: () => void; sector: EmploymentSector }) => (
-  <div className="min-h-screen bg-gray-50 text-gray-900">
+const PublicLayout = ({ children, onAuthClick, sector }: { children: React.ReactNode; onAuthClick: () => void; sector: EmploymentSector }) => {
+  const theme = getSectorTheme(sector);
+  return <div className={`min-h-screen text-gray-900 ${theme.page}`}>
     <header className="bg-white border-b border-gray-100 sticky top-0 z-30">
       <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
         <SectorBrand sector={sector} />
-        <button onClick={onAuthClick} className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
+        <button onClick={onAuthClick} className={`text-sm font-bold ${theme.accentText}`}>
           Ingresar / Registrarme
         </button>
       </div>
     </header>
     <main className="max-w-6xl mx-auto px-4 py-8 pb-28">{children}</main>
-  </div>
-);
+  </div>;
+};
 
-const WorkerLayout = ({ children, onNavigate, onLogout, sector }: { children: React.ReactNode; onNavigate: (to: string) => void; onLogout: () => void; sector: EmploymentSector }) => (
-  <div className="min-h-screen bg-gray-50 text-gray-900">
+const WorkerLayout = ({ children, onNavigate, onLogout, sector }: { children: React.ReactNode; onNavigate: (to: string) => void; onLogout: () => void; sector: EmploymentSector }) => {
+  const theme = getSectorTheme(sector);
+  return <div className={`min-h-screen text-gray-900 ${theme.page}`} data-sector={sector}>
     <header className="bg-white border-b border-gray-100 sticky top-0 z-30">
       <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <SectorBrand sector={sector} />
-        <nav className="flex flex-wrap gap-2">
-          <button onClick={() => onNavigate("/trabajos")} className="px-3 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700">
-            Ofertas
-          </button>
+        <nav aria-label="Navegación del trabajador" className="flex flex-wrap gap-2">
           <button onClick={() => onNavigate("/worker")} className="px-3 py-1.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700">
             Inicio
+          </button>
+          <button onClick={() => onNavigate("/trabajos")} className={`px-3 py-1.5 rounded-full text-xs font-bold ${theme.buttonMuted}`}>
+            Buscar trabajo
           </button>
           <button
             onClick={() => onNavigate("/worker/postulaciones")}
             className="px-3 py-1.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700"
           >
-            Postulaciones
+            Mis postulaciones
           </button>
           <button onClick={() => onNavigate("/worker/perfil")} className="px-3 py-1.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700">
-            Mi Perfil
+            Mi perfil
           </button>
         </nav>
         <button
@@ -300,8 +305,8 @@ const WorkerLayout = ({ children, onNavigate, onLogout, sector }: { children: Re
       </div>
     </header>
     <main className="max-w-6xl mx-auto px-4 py-8">{children}</main>
-  </div>
-);
+  </div>;
+};
 
 const JobCardPublic = ({ job, onSelect }: { job: JobListing; onSelect: () => void }) => (
   <button
@@ -750,35 +755,36 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
     return (
       <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
         <div className="grid gap-6">
-          <div className="bg-white rounded-3xl border border-emerald-100 p-6 shadow-sm">
+          <div className={`bg-white rounded-3xl border p-6 shadow-sm ${getSectorTheme(sector).softBorder}`}>
             <h2 className="text-xl font-extrabold text-gray-900">¡Hola, {workerProfile?.fullName || "Trabajador"}!</h2>
             <p className="text-sm text-gray-500 mt-2">
               Aquí podrás revisar tus postulaciones y actualizar tu perfil.
             </p>
             <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="rounded-2xl bg-emerald-50 p-4 border border-emerald-100">
-                <div className="text-xs text-emerald-700 font-bold">Postulaciones activas</div>
-                <div className="text-2xl font-black text-emerald-700 mt-2">{applications.length}</div>
+              <div className={`rounded-2xl p-4 border ${getSectorTheme(sector).soft}`}>
+                <div className="text-xs font-bold">Postulaciones activas</div>
+                <div className="text-2xl font-black mt-2">{applications.length}</div>
               </div>
               <div className="rounded-2xl bg-white p-4 border border-gray-100">
                 <div className="text-xs text-gray-500 font-bold">Ofertas disponibles</div>
                 <div className="text-2xl font-black text-gray-800 mt-2">{visibleJobs.length}</div>
               </div>
-              <div className="rounded-2xl bg-white p-4 border border-gray-100">
+              <button onClick={() => go("/worker/perfil")} className={`rounded-2xl bg-white p-4 border border-gray-100 text-left ${getSectorTheme(sector).hoverBorder}`}>
                 <div className="text-xs text-gray-500 font-bold">Perfil</div>
-                <div className="text-sm font-semibold text-gray-700 mt-2">{workerProfile?.rut || "Sin RUT"}</div>
-              </div>
+                <div className="text-sm font-semibold text-gray-700 mt-2">{workerProfile?.rut ? "Datos principales completos" : "Completar RUT y datos personales"}</div>
+              </button>
             </div>
           </div>
 
           <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-extrabold text-gray-900">Últimas ofertas</h3>
-              <button onClick={() => go("/trabajos")} className="text-xs font-bold text-emerald-600">
+              <button onClick={() => go("/trabajos")} className={`text-xs font-bold ${getSectorTheme(sector).accentText}`}>
                 Ver todas
               </button>
             </div>
             <div className="mt-4 grid gap-4">
+              {visibleJobs.length === 0 && <div className="rounded-2xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">Todavía no hay ofertas disponibles en esta área.</div>}
               {visibleJobs.slice(0, 3).map((job) => (
                 <JobCardPrivate
                   key={`${job.companyId}-${job.id}`}
@@ -799,7 +805,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
       <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
         <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
           <h2 className="text-xl font-extrabold text-gray-900">Mis postulaciones</h2>
-          <p className="text-sm text-gray-500 mt-2">Sigue el estado de tus postulaciones.</p>
+          <p className="text-sm text-gray-500 mt-2">Cada trabajo aparece una sola vez con su estado actual.</p>
           <div className="mt-6 grid gap-4">
             {matches
               .filter((match) => ["matched", "hired"].includes(String(match.state || "")))
@@ -807,7 +813,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
                 const contact = matchContacts[match.id];
                 return (
                   <div key={match.id} className="rounded-3xl border-2 border-emerald-300 bg-emerald-50 p-5">
-                    <div className="text-sm font-black uppercase tracking-wide text-emerald-800">¡Hay coincidencia!</div>
+                    <div className="text-sm font-black uppercase tracking-wide text-emerald-800">Ambos están interesados</div>
                     <div className="mt-2 text-xl font-black text-gray-900">{match.jobTitle || "Oferta de trabajo"}</div>
                     <div className="mt-1 text-base text-gray-700">{match.companyName || "Empresa"}</div>
                     <p className="mt-3 text-sm leading-relaxed text-emerald-900">La empresa también está interesada. Ya pueden coordinar los siguientes pasos.</p>
@@ -879,7 +885,10 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
                 Aún no tienes postulaciones registradas.
               </div>
             )}
-            {applications.map((app) => (
+            {applications.filter((app) => !matches.some((match) =>
+              (match.jobId && match.companyId && match.jobId === app.jobId && match.companyId === app.companyId) ||
+              (!match.jobId && match.jobTitle === app.jobTitle && match.companyName === app.companyName)
+            )).map((app) => (
               <div key={app.id} className="border border-gray-100 rounded-2xl p-4 flex flex-col sm:flex-row gap-3">
                 <div className="flex-1">
                   <div className="text-sm font-extrabold text-gray-900">{app.jobTitle || "Oferta"}</div>
@@ -902,9 +911,9 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
     return (
       <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
         <div className="grid gap-6">
-          <WorkerProfileEditor uid={authUser.uid} email={authUser.email || ""} profile={workerProfile} />
+          <WorkerProfileEditor uid={authUser.uid} email={authUser.email || ""} profile={workerProfile} sector={sector} />
 
-          <WorkerCredentialsPanel uid={authUser.uid} />
+          <WorkerCredentialsPanel uid={authUser.uid} sector={sector} />
 
           <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
             <h3 className="text-lg font-extrabold text-gray-900">Documentos laborales</h3>

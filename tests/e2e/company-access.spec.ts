@@ -6,10 +6,15 @@ test("empresa autorizada entra al portal compartido y ve ambos sectores", async 
   await page.getByRole("button", {name: "Ingresar al entorno E2E"}).click();
 
   await expect(page.getByText("Empresa Piloto San Clemente").first()).toBeVisible();
-  await expect(page.getByRole("button", {name: "Mis Ofertas"})).toBeVisible();
-  await page.getByRole("button", {name: "Mis Ofertas"}).click();
+  await expect(page.getByRole("button", {name: "Ofertas", exact: true})).toBeVisible();
+  await expect(page.getByText("Cosecha Cerezas")).not.toBeVisible();
+  await expect(page.getByText("Mapa Simulado")).not.toBeVisible();
+  await page.getByRole("button", {name: "Ofertas", exact: true}).click();
   await expect(page.getByText("Cosecha piloto San Clemente")).toBeVisible();
   await expect(page.getByText("Guardia piloto Talca")).toBeVisible();
+  await page.getByRole("button", {name: "Crear oferta"}).click();
+  await expect(page.getByText("Crear oferta de trabajo")).toBeVisible();
+  await expect(page.getByText(/Guardar borrador mantiene la oferta privada/)).toBeVisible();
 });
 
 test("empresa no incorporada puede enviar una solicitud sin obtener acceso", async ({page}) => {
@@ -22,4 +27,3 @@ test("empresa no incorporada puede enviar una solicitud sin obtener acceso", asy
   await expect(page.getByText("Solicitud recibida")).toBeVisible();
   await expect(page.getByText(/no concede acceso automático/i)).not.toBeVisible();
 });
-

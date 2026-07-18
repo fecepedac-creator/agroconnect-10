@@ -8,6 +8,7 @@ import {
 } from "../services/workerAuth";
 import {SECTOR_EXPERIENCES, type EmploymentSector} from "../sectorExperience";
 import {LEGAL_VERSION} from "../legalContent";
+import {getSectorTheme} from "../sectorTheme";
 
 type Props = {
   onSuccess: () => void;
@@ -26,6 +27,7 @@ export default function WorkerAuthScreen({
 }: Props) {
   const experience = SECTOR_EXPERIENCES[sector];
   const isAgriculture = sector === "agriculture";
+  const theme = getSectorTheme(sector);
   const [mode, setMode] = useState<"login" | "register">(initialMode);
   const [registerStep, setRegisterStep] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -53,7 +55,7 @@ export default function WorkerAuthScreen({
     setMode(initialMode);
   }, [initialMode]);
 
-  const inputClass = "w-full min-h-12 rounded-xl border border-gray-300 px-4 text-base outline-none transition focus:ring-2 focus:ring-emerald-300";
+  const inputClass = `w-full min-h-12 rounded-xl border border-gray-300 px-4 text-base outline-none transition focus:ring-2 ${theme.focus}`;
 
   const changeMode = (nextMode: "login" | "register") => {
     setMode(nextMode);
@@ -259,8 +261,8 @@ export default function WorkerAuthScreen({
                   {showPassword ? <FiEyeOff /> : <FiEye />}
                 </button>
               </div>
-              <button type="button" onClick={handlePasswordReset} className="min-h-11 text-sm font-bold text-emerald-800">Olvidé mi clave</button>
-              <button disabled={loading} className="min-h-14 w-full rounded-2xl bg-emerald-700 text-base font-black text-white disabled:opacity-60">
+              <button type="button" onClick={handlePasswordReset} className={`min-h-11 text-sm font-bold ${theme.accentText}`}>Olvidé mi clave</button>
+              <button disabled={loading} className={`min-h-14 w-full rounded-2xl text-base font-black disabled:opacity-60 ${theme.button}`}>
                 {loading ? "Ingresando..." : "Ingresar"}
               </button>
               <button type="button" onClick={handleGoogle} disabled={loading} className="min-h-14 w-full rounded-2xl border border-gray-300 bg-white text-base font-black text-gray-800 disabled:opacity-60">
@@ -275,7 +277,7 @@ export default function WorkerAuthScreen({
                   <span>{registerStep === 1 ? "Tu cuenta" : registerStep === 2 ? "Tu trabajo" : "Tu movilidad"}</span>
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2">
-                  {[1, 2, 3].map((step) => <span key={step} className={`h-2 rounded-full ${step <= registerStep ? "bg-emerald-600" : "bg-gray-200"}`} />)}
+                  {[1, 2, 3].map((step) => <span key={step} className={`h-2 rounded-full ${step <= registerStep ? (isAgriculture ? "bg-emerald-600" : "bg-blue-950") : "bg-gray-200"}`} />)}
                 </div>
               </div>
 
@@ -313,7 +315,7 @@ export default function WorkerAuthScreen({
                     <legend className="mb-3 text-base font-black text-gray-900">También me interesan</legend>
                     <div className="grid grid-cols-2 gap-3">
                       {(["agriculture", "security"] as EmploymentSector[]).map((item) => (
-                        <button key={item} type="button" onClick={() => toggleSector(item)} className={`min-h-14 rounded-2xl border-2 text-sm font-black ${sectors.includes(item) ? "border-emerald-600 bg-emerald-50 text-emerald-900" : "border-gray-200 text-gray-600"}`}>
+                        <button key={item} type="button" onClick={() => toggleSector(item)} className={`min-h-14 rounded-2xl border-2 text-sm font-black ${sectors.includes(item) ? theme.selected : "border-gray-200 text-gray-600"}`}>
                           {item === "agriculture" ? "Agricultura" : "Seguridad"}
                         </button>
                       ))}
@@ -334,7 +336,7 @@ export default function WorkerAuthScreen({
                       ["public_transport", "Uso locomoción pública"],
                       ["own_transport", "Tengo transporte propio"],
                     ] as Array<[Mobility, string]>).map(([value, label]) => (
-                      <button key={value} type="button" onClick={() => setMobility(value)} className={`min-h-14 rounded-2xl border-2 px-4 text-left text-base font-black ${mobility === value ? "border-emerald-600 bg-emerald-50 text-emerald-900" : "border-gray-200 text-gray-700"}`}>
+                      <button key={value} type="button" onClick={() => setMobility(value)} className={`min-h-14 rounded-2xl border-2 px-4 text-left text-base font-black ${mobility === value ? theme.selected : "border-gray-200 text-gray-700"}`}>
                         {label}
                       </button>
                     ))}
@@ -347,19 +349,19 @@ export default function WorkerAuthScreen({
                     MundoConnect no es tu empleador. La empresa que contrata es responsable del trabajo y del pago. Tus datos solo se comparten para oportunidades laborales.
                   </div>
                   <label className="flex min-h-12 items-start gap-3 text-base font-bold text-gray-800">
-                    <input aria-label="Acepto términos y privacidad" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} className="mt-1 h-5 w-5 accent-emerald-600" />
-                    <span>Acepto los <a className="text-emerald-800 underline" href="/legal/terminos" target="_blank" rel="noreferrer">términos</a> y la <a className="text-emerald-800 underline" href="/legal/privacidad" target="_blank" rel="noreferrer">política de privacidad</a>.</span>
+                    <input aria-label="Acepto términos y privacidad" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} className={`mt-1 h-5 w-5 ${theme.accent}`} />
+                    <span>Acepto los <a className={`${theme.accentText} underline`} href="/legal/terminos" target="_blank" rel="noreferrer">términos</a> y la <a className={`${theme.accentText} underline`} href="/legal/privacidad" target="_blank" rel="noreferrer">política de privacidad</a>.</span>
                   </label>
                   <label className="flex min-h-12 items-start gap-3 text-base font-bold text-gray-800">
-                    <input aria-label="Autorizo matching laboral" type="checkbox" checked={matchingConsent} onChange={(event) => setMatchingConsent(event.target.checked)} className="mt-1 h-5 w-5 accent-emerald-600" />
+                    <input aria-label="Autorizo matching laboral" type="checkbox" checked={matchingConsent} onChange={(event) => setMatchingConsent(event.target.checked)} className={`mt-1 h-5 w-5 ${theme.accent}`} />
                     <span>Autorizo que mi perfil laboral limitado sea considerado para oportunidades. Mi contacto seguirá oculto hasta el flujo autorizado.</span>
                   </label>
                   <label className="flex min-h-12 items-start gap-3 text-sm font-semibold text-gray-700">
-                    <input aria-label="Acepto mensajes operativos" type="checkbox" checked={operationalMessages} onChange={(event) => setOperationalMessages(event.target.checked)} className="mt-1 h-5 w-5 accent-emerald-600" />
+                    <input aria-label="Acepto mensajes operativos" type="checkbox" checked={operationalMessages} onChange={(event) => setOperationalMessages(event.target.checked)} className={`mt-1 h-5 w-5 ${theme.accent}`} />
                     <span>Quiero recibir avisos operativos sobre postulaciones y matches por los canales informados.</span>
                   </label>
                   <label className="flex min-h-12 items-start gap-3 text-sm font-semibold text-gray-700">
-                    <input aria-label="Acepto marketing" type="checkbox" checked={marketing} onChange={(event) => setMarketing(event.target.checked)} className="mt-1 h-5 w-5 accent-emerald-600" />
+                    <input aria-label="Acepto marketing" type="checkbox" checked={marketing} onChange={(event) => setMarketing(event.target.checked)} className={`mt-1 h-5 w-5 ${theme.accent}`} />
                     <span>Quiero recibir novedades y campañas de MundoConnect. Esto es opcional.</span>
                   </label>
                   <p className="text-sm text-gray-500">Podrás verificar tu RUT posteriormente desde tu perfil.</p>
@@ -368,7 +370,7 @@ export default function WorkerAuthScreen({
 
               <div className="flex gap-3">
                 {registerStep > 1 && <button type="button" onClick={() => { setError(null); setRegisterStep((step) => step - 1); }} className="min-h-14 flex-1 rounded-2xl border border-gray-300 text-base font-black text-gray-700">Volver</button>}
-                <button disabled={loading} className="min-h-14 flex-1 rounded-2xl bg-emerald-700 px-5 text-base font-black text-white disabled:opacity-60">
+                <button disabled={loading} className={`min-h-14 flex-1 rounded-2xl px-5 text-base font-black disabled:opacity-60 ${theme.button}`}>
                   {loading ? "Creando..." : registerStep === 3 ? "Crear mi cuenta" : "Continuar"}
                 </button>
               </div>
@@ -376,7 +378,7 @@ export default function WorkerAuthScreen({
           )}
 
           {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{error}</div>}
-          {success && <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">{success}</div>}
+          {success && <div className={`mt-5 rounded-xl border p-4 text-sm font-semibold ${theme.soft}`}>{success}</div>}
         </div>
       </div>
     </div>

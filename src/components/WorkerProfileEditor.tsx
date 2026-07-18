@@ -5,6 +5,7 @@ import {updateWorkerProfile, updateWorkerRut} from "../services/workerAuth";
 import {functions} from "../firebase";
 import {formatRut, isValidRut} from "../utils/rut";
 import type {EmploymentSector} from "../sectorExperience";
+import {getSectorTheme} from "../sectorTheme";
 
 type Mobility = "needs_transport" | "public_transport" | "own_transport";
 type Os10Status = "none" | "in_process" | "valid" | "expired";
@@ -27,9 +28,11 @@ type Props = {
   uid: string;
   email: string;
   profile: EditableWorkerProfile | null;
+  sector?: EmploymentSector;
 };
 
-export default function WorkerProfileEditor({uid, email, profile}: Props) {
+export default function WorkerProfileEditor({uid, email, profile, sector = "agriculture"}: Props) {
+  const theme = getSectorTheme(sector);
   const [fullName, setFullName] = useState("");
   const [rut, setRut] = useState("");
   const [phone, setPhone] = useState("");
@@ -106,7 +109,7 @@ export default function WorkerProfileEditor({uid, email, profile}: Props) {
     }
   };
 
-  const inputClass = "min-h-12 w-full rounded-xl border border-gray-300 bg-white px-4 text-base outline-none focus:ring-2 focus:ring-emerald-300";
+  const inputClass = `min-h-12 w-full rounded-xl border border-gray-300 bg-white px-4 text-base outline-none focus:ring-2 ${theme.focus}`;
 
   const requestDeletion = async () => {
     if (!window.confirm("Ocultaremos tu perfil y enviaremos una solicitud de eliminación. ¿Deseas continuar?")) return;
@@ -132,8 +135,8 @@ export default function WorkerProfileEditor({uid, email, profile}: Props) {
             <h2 className="text-2xl font-black text-gray-900">Mi perfil laboral</h2>
             <p className="mt-2 text-base text-gray-600">Una sola cuenta para todas tus oportunidades.</p>
           </div>
-          <label className="flex min-h-12 items-center gap-3 rounded-2xl bg-emerald-50 px-4 text-base font-black text-emerald-900">
-            <input type="checkbox" checked={available} onChange={(event) => setAvailable(event.target.checked)} className="h-5 w-5 accent-emerald-600" />
+          <label className={`flex min-h-12 items-center gap-3 rounded-2xl border px-4 text-base font-black ${theme.soft}`}>
+            <input type="checkbox" checked={available} onChange={(event) => setAvailable(event.target.checked)} className={`h-5 w-5 ${theme.accent}`} />
             Disponible para trabajar
           </label>
         </div>
@@ -164,7 +167,7 @@ export default function WorkerProfileEditor({uid, email, profile}: Props) {
           <legend className="text-base font-black text-gray-900">Tipos de trabajo que te interesan</legend>
           <div className="mt-3 grid grid-cols-2 gap-3">
             {(["agriculture", "security"] as EmploymentSector[]).map((sector) => (
-              <button key={sector} type="button" onClick={() => toggleSector(sector)} className={`min-h-14 rounded-2xl border-2 text-base font-black ${sectors.includes(sector) ? "border-emerald-600 bg-emerald-50 text-emerald-900" : "border-gray-200 text-gray-600"}`}>
+              <button key={sector} type="button" onClick={() => toggleSector(sector)} className={`min-h-14 rounded-2xl border-2 text-base font-black ${sectors.includes(sector) ? theme.selected : "border-gray-200 text-gray-600"}`}>
                 {sector === "agriculture" ? "Agricultura" : "Seguridad"}
               </button>
             ))}
@@ -213,13 +216,13 @@ export default function WorkerProfileEditor({uid, email, profile}: Props) {
       </section>
 
       {notice && (
-        <div className={`rounded-2xl border p-4 text-sm font-bold ${notice.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}>
+        <div className={`rounded-2xl border p-4 text-sm font-bold ${notice.type === "success" ? theme.soft : "border-red-200 bg-red-50 text-red-800"}`}>
           {notice.type === "success" && <CheckCircle2 size={18} className="mr-2 inline" />}
           {notice.text}
         </div>
       )}
 
-      <button onClick={save} disabled={saving} className="flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl bg-emerald-700 text-base font-black text-white shadow-lg disabled:opacity-60">
+      <button onClick={save} disabled={saving} className={`flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl text-base font-black shadow-lg disabled:opacity-60 ${theme.button}`}>
         <Save size={20} /> {saving ? "Guardando..." : "Guardar mi perfil"}
       </button>
       <section className="rounded-3xl border border-red-200 bg-white p-5 sm:p-7">
