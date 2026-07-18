@@ -77,12 +77,22 @@ async function seedBaseData() {
       role: 'worker',
       email: 'workera@example.com',
       companyId: null,
+      rut: '123456785',
     });
 
     await setDoc(doc(db, 'users', 'workerB'), {
       role: 'worker',
       email: 'workerb@example.com',
       companyId: null,
+      rut: '111111111',
+    });
+
+    await setDoc(doc(db, 'workers', 'workerA'), {
+      uid: 'workerA',
+      role: 'worker',
+      email: 'workera@example.com',
+      companyId: null,
+      rut: '123456785',
     });
 
     await setDoc(doc(db, 'users', 'companyAdminA'), {
@@ -492,6 +502,31 @@ async function main() {
     await assertFails(updateDoc(doc(db, 'worker_usernames', 'rut-worker-b'), { email: 'new@example.com' }));
   }));
 
+  results.push(await runCase('abuse: Worker cannot change RUT in users profile', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(updateDoc(doc(db, 'users', 'workerA'), { rut: '111111111' }));
+  }));
+
+  results.push(await runCase('abuse: Worker cannot change RUT in workers profile', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(updateDoc(doc(db, 'workers', 'workerA'), { rut: '111111111' }));
+  }));
+
+  results.push(await runCase('abuse: Client cannot create a worker profile containing RUT', async () => {
+    const db = workerDb('workerC', 'workerc@example.com');
+    await assertFails(setDoc(doc(db, 'workers', 'workerC'), {
+      uid: 'workerC',
+      role: 'worker',
+      email: 'workerc@example.com',
+      rut: '123456785',
+    }));
+  }));
+
+  results.push(await runCase('abuse: Owner cannot delete worker username mapping', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(deleteDoc(doc(db, 'worker_usernames', 'rut-worker-a')));
+  }));
+
   results.push(await runCase('abuse: Worker cannot update application status', async () => {
     const db = workerDb('workerA', 'workera@example.com');
     await assertFails(updateDoc(doc(db, APP_PATH), { status: 'hired' }));
@@ -766,9 +801,9 @@ async function main() {
     }));
   }));
 
-  results.push(await runCase('legit: Worker can create initial username mapping for new rut', async () => {
+  results.push(await runCase('abuse: Worker cannot create initial username mapping from client', async () => {
     const db = workerDb('workerA', 'workera@example.com');
-    await assertSucceeds(
+    await assertFails(
       setDoc(doc(db, 'worker_usernames', 'rut-worker-a-new'), {
         uid: 'workerA',
         email: 'workera@example.com',
