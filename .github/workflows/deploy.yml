@@ -1,77 +1,170 @@
-﻿name: Deploy to Firebase Hosting
+name: Validated Firebase Deploy
 
 on:
   push:
     branches:
       - main
       - 'release/*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: staging
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      deploy_auxiliary_rules:
+        description: Deploy deny-by-default Storage and Realtime Database rules
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
 
 jobs:
-  build_and_deploy:
+  validate:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Setup Java for Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix functions ci
+
+      - name: Secret and history gate
+        shell: pwsh
+        run: ./ops/security-scan.ps1
+
+      - name: Dependency vulnerability gate
+        run: |
+          npm audit --omit=dev --audit-level=high
+          npm --prefix functions audit --omit=dev --audit-level=high
+
+      - name: Source and rules gates
+        run: |
+          npm run lint
+          npm run build
+          npm run test:rules
+          ESLINT_USE_FLAT_CONFIG=false npm --prefix functions run lint
+          npm --prefix functions test
+
+      - name: Isolated E2E gate
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e:emulated
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod' && 'production') || (github.event_name == 'workflow_dispatch' && inputs.environment) || (github.ref_name == 'main' && 'production') || 'staging' }}
     concurrency:
-      group: hosting-${{ github.ref_name }}
+      group: firebase-${{ (github.event_name == 'workflow_dispatch' && inputs.environment) || (github.ref_name == 'main' && 'prod') || 'staging' }}
       cancel-in-progress: false
     permissions:
       contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID_DEV: ${{ secrets.FIREBASE_PROJECT_ID_DEV }}
+      FIREBASE_PROJECT_ID_STAGING: ${{ secrets.FIREBASE_PROJECT_ID_STAGING }}
+      FIREBASE_PROJECT_ID_PROD: ${{ secrets.FIREBASE_PROJECT_ID_PROD }}
+      SUPERADMIN_EMAILS_DEV: ${{ secrets.SUPERADMIN_EMAILS_DEV }}
+      SUPERADMIN_EMAILS_STAGING: ${{ secrets.SUPERADMIN_EMAILS_STAGING }}
+      SUPERADMIN_EMAILS_PROD: ${{ secrets.SUPERADMIN_EMAILS_PROD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
 
-      - name: Resolve target project
+      - name: Resolve and validate explicit target
         id: target
         shell: bash
         run: |
-          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-            echo "project_id=${{ secrets.FIREBASE_PROJECT_ID_PROD }}" >> "$GITHUB_OUTPUT"
-            echo "channel=live" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENVIRONMENT="${{ inputs.environment }}"
+          elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            ENVIRONMENT="prod"
           else
-            echo "project_id=${{ secrets.FIREBASE_PROJECT_ID_STAGING }}" >> "$GITHUB_OUTPUT"
-            echo "channel=live" >> "$GITHUB_OUTPUT"
+            ENVIRONMENT="staging"
           fi
 
-      - name: Install Dependencies
-        run: npm ci
+          case "$ENVIRONMENT" in
+            dev) PROJECT_ID="$FIREBASE_PROJECT_ID_DEV" ;;
+            staging) PROJECT_ID="$FIREBASE_PROJECT_ID_STAGING" ;;
+            prod) PROJECT_ID="$FIREBASE_PROJECT_ID_PROD" ;;
+            *) echo "Unsupported deployment environment." >&2; exit 1 ;;
+          esac
 
-      - name: Validate source
-        run: |
-          npm run lint
-          npm run test:rules
-
-      - name: Validate target secrets
-        shell: bash
-        run: |
-          if [[ -z "${{ steps.target.outputs.project_id }}" ]]; then
-            echo "Missing Firebase project ID secret for this branch." >&2
+          if [[ -z "$PROJECT_ID" ]]; then
+            echo "The external Firebase project ID is not configured for $ENVIRONMENT." >&2
             exit 1
           fi
-          for value in \
-            '${{ secrets.VITE_FIREBASE_API_KEY }}' \
-            '${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}' \
-            '${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}' \
-            '${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}' \
-            '${{ secrets.VITE_FIREBASE_APP_ID }}' \
-            '${{ secrets.VITE_LEGAL_OPERATOR_NAME }}' \
-            '${{ secrets.VITE_LEGAL_OPERATOR_RUT }}' \
-            '${{ secrets.VITE_LEGAL_OPERATOR_ADDRESS }}' \
-            '${{ secrets.VITE_LEGAL_CONTACT_EMAIL }}'; do
-            if [[ -z "$value" ]]; then
-              echo "Missing Firebase web configuration for this environment." >&2
-              exit 1
-            fi
-          done
 
-      - name: Build
-        run: npm run build
+          echo "::add-mask::$PROJECT_ID"
+          echo "FIREBASE_ENVIRONMENT=$ENVIRONMENT" >> "$GITHUB_ENV"
+          echo "TARGET_PROJECT_ID=$PROJECT_ID" >> "$GITHUB_ENV"
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+
+      - name: Validate selected Firebase environment
+        run: npm run check:firebase-envs
+
+      - name: Validate auxiliary rules opt-in
+        id: rules
+        shell: bash
+        run: |
+          ENABLE_AUXILIARY_RULES="${{ (github.event_name == 'workflow_dispatch' && inputs.deploy_auxiliary_rules) || vars.DEPLOY_AUXILIARY_RULES == 'true' }}"
+          TARGETS="hosting,functions,firestore:rules,firestore:indexes"
+          if [[ "$ENABLE_AUXILIARY_RULES" == "true" ]]; then
+            test -s storage.rules
+            test -s database.rules.json
+            TARGETS="$TARGETS,storage,database"
+            echo "auxiliary_rules=included" >> "$GITHUB_OUTPUT"
+          else
+            echo "auxiliary_rules=not-authorized" >> "$GITHUB_OUTPUT"
+          fi
+          echo "targets=$TARGETS" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_AGROCONNECT_APP_420 }}
+
+      - name: Install and build release
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
-          VITE_FIREBASE_PROJECT_ID: ${{ steps.target.outputs.project_id }}
           VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
@@ -79,11 +172,74 @@ jobs:
           VITE_LEGAL_OPERATOR_RUT: ${{ secrets.VITE_LEGAL_OPERATOR_RUT }}
           VITE_LEGAL_OPERATOR_ADDRESS: ${{ secrets.VITE_LEGAL_OPERATOR_ADDRESS }}
           VITE_LEGAL_CONTACT_EMAIL: ${{ secrets.VITE_LEGAL_CONTACT_EMAIL }}
+        shell: bash
+        run: |
+          REQUIRED_WEB_CONFIG=(
+            VITE_FIREBASE_API_KEY
+            VITE_FIREBASE_AUTH_DOMAIN
+            VITE_FIREBASE_STORAGE_BUCKET
+            VITE_FIREBASE_MESSAGING_SENDER_ID
+            VITE_FIREBASE_APP_ID
+            VITE_LEGAL_OPERATOR_NAME
+            VITE_LEGAL_OPERATOR_RUT
+            VITE_LEGAL_OPERATOR_ADDRESS
+            VITE_LEGAL_CONTACT_EMAIL
+          )
+          for name in "${REQUIRED_WEB_CONFIG[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "Required web configuration $name is not configured." >&2
+              exit 1
+            fi
+          done
+          export VITE_FIREBASE_PROJECT_ID="$TARGET_PROJECT_ID"
+          npm ci
+          npm --prefix functions ci
+          npm run build
+          npm --prefix functions run build
 
-      - name: Deploy to Firebase Hosting
-        uses: FirebaseExtended/action-hosting-deploy@v0
+      - name: Write Functions parameters
+        shell: bash
+        run: |
+          case "$FIREBASE_ENVIRONMENT" in
+            dev) SUPERADMIN_EMAILS="$SUPERADMIN_EMAILS_DEV" ;;
+            staging) SUPERADMIN_EMAILS="$SUPERADMIN_EMAILS_STAGING" ;;
+            prod) SUPERADMIN_EMAILS="$SUPERADMIN_EMAILS_PROD" ;;
+          esac
+          if [[ -z "$SUPERADMIN_EMAILS" ]]; then
+            echo "SUPERADMIN_EMAILS is not configured for $FIREBASE_ENVIRONMENT." >&2
+            exit 1
+          fi
+          printf 'SUPERADMIN_EMAILS=%s\n' "$SUPERADMIN_EMAILS" > "functions/.env.$TARGET_PROJECT_ID"
+
+      - name: Create immutable release manifest
+        shell: bash
+        run: |
+          node -e 'const fs=require("fs"); fs.writeFileSync("deployment-manifest.json", JSON.stringify({commit:process.env.GITHUB_SHA,ref:process.env.GITHUB_REF,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,actor:process.env.GITHUB_ACTOR,environment:process.env.FIREBASE_ENVIRONMENT,projectId:process.env.TARGET_PROJECT_ID,targets:process.env.DEPLOY_TARGETS,createdAt:new Date().toISOString()},null,2)+"\n")'
+        env:
+          DEPLOY_TARGETS: ${{ steps.rules.outputs.targets }}
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@v4
         with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_AGROCONNECT_APP_420 }}'
-          channelId: '${{ steps.target.outputs.channel }}'
-          projectId: '${{ steps.target.outputs.project_id }}'
+          name: firebase-release-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            deployment-manifest.json
+            dist/**
+            functions/lib/**
+
+      - name: Deploy validated commit to explicit project
+        run: npx firebase-tools deploy --only "${{ steps.rules.outputs.targets }}" --project "$TARGET_PROJECT_ID" --non-interactive
+
+      - name: Record deployment trace
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "### Firebase deployment"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Environment: \`$FIREBASE_ENVIRONMENT\`"
+            echo "- Artifact: \`firebase-release-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT\`"
+            echo "- Auxiliary rules: \`${{ steps.rules.outputs.auxiliary_rules }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

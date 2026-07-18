@@ -7,6 +7,7 @@ on:
       - 'release/*'
   push:
     branches:
+      - fix/restore-agroconnect
       - 'codex/*'
       - 'release/*'
 

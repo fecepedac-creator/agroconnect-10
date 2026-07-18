@@ -8,15 +8,36 @@ on:
       - 'release/*'
   push:
     branches:
+      - fix/restore-agroconnect
       - 'codex/*'
       - 'release/*'
 
 jobs:
   security-scan:
     runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Run secret and config scan
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Scan current tree and Git history
         shell: pwsh
         run: .\ops\security-scan.ps1
+
+      - name: Audit production dependencies
+        shell: pwsh
+        run: |
+          npm audit --omit=dev --audit-level=high
+          npm --prefix functions audit --omit=dev --audit-level=high

@@ -78,18 +78,24 @@ Gates:
 - `firestore-rules`: ejecuta pruebas de reglas en emulador con Java 21.
 - `frontend`: lint + build.
 - `functions`: lint + build.
+- `security-guardrails`: escaneo de secretos en HEAD/historial y `npm audit` de
+  dependencias productivas con severidad alta o critica.
 
 ## Deploy
 
-Hosting:
-- Workflow: `.github/workflows/deploy.yml`
-
-Functions:
-- Workflow: `.github/workflows/deploy-functions.yml`
+Hosting, Functions y reglas:
+- Workflow unico: `.github/workflows/deploy.yml`
+- El job de deploy depende de lint, build, tests, E2E, auditoria y secret scan.
+- Cada comando Firebase recibe `--project` con un ID externo explicito.
+- Storage/Database requieren autorizacion `DEPLOY_AUXILIARY_RULES=true` o input
+  manual equivalente porque aun no tienen tests dedicados.
+- Cada ejecucion conserva manifiesto, frontend y Functions compiladas asociados
+  al commit SHA.
 - Seleccion de entorno:
-  - `main` -> prod
+  - `main` -> prod cuando esa rama exista
   - `release/*` -> staging
   - `workflow_dispatch` -> dev/staging/prod
+  - `fix/restore-agroconnect` no despliega implicitamente
 
 Secrets requeridos:
 - `FIREBASE_SERVICE_ACCOUNT_AGROCONNECT_APP_420`
