@@ -1,8 +1,8 @@
 # Auditoria integral de puesta en marcha de MundoConnect
 
-Fecha: 2026-07-17  
-Rama auditada: `codex/dashboard-ux-hardening`  
-Commit auditado: `2397866`  
+Fecha: 2026-07-17
+Rama auditada: `codex/dashboard-ux-hardening`
+Commit auditado: `2397866`
 Alcance: frontend React, Firebase Auth, Firestore, Rules, Cloud Functions, CI/CD, operaciones, producto, UX y modelo de matching.
 
 ## 1. Veredicto ejecutivo
@@ -400,7 +400,7 @@ Entregables:
 - Eliminar la posibilidad de deploy manual no trazado.
 - Crear registro de decision arquitectonica para fuente canonica del matching.
 
-Responsable: Lead de plataforma.  
+Responsable: Lead de plataforma.
 Gate: build reproducible desde `main` y mapa commit -> artefacto -> Firebase.
 
 ### Etapa 1. Contencion de seguridad y privacidad
@@ -417,7 +417,7 @@ Entregables:
 - Borrado de datos reanudable.
 - Tests de abuso para cada control.
 
-Responsable: Security/Data.  
+Responsable: Security/Data.
 Gate: cero P0 y cero P1 de exposicion o autorizacion abiertos.
 
 ### Etapa 2. Integridad del dominio laboral
@@ -434,7 +434,7 @@ Entregables:
 - Contratacion bilateral y evaluacion posterior a finalizacion.
 - Reconciliador de proyecciones.
 
-Responsable: Backend/Domain.  
+Responsable: Backend/Domain.
 Gate: pruebas de concurrencia, idempotencia y recuperacion aprobadas.
 
 ### Etapa 3. Fiabilidad y simplicidad de experiencia
@@ -451,7 +451,7 @@ Entregables:
 - Modales accesibles y navegacion con teclado.
 - Pruebas con zoom 200%, Android, iPhone y usuarios 40+.
 
-Responsable: Frontend/UX/QA.  
+Responsable: Frontend/UX/QA.
 Gate: al menos 80% de usuarios piloto completa registro y postulacion sin ayuda; ningun error silencioso.
 
 ### Etapa 4. Ambientes, CI/CD y continuidad
@@ -467,7 +467,7 @@ Entregables:
 - Backup programado y restore drill.
 - Presupuesto, alertas y limites por ambiente.
 
-Responsable: DevOps/SRE.  
+Responsable: DevOps/SRE.
 Gate: release de staging promovida sin rebuild y rollback/restore exitosos.
 
 ### Etapa 5. Comunicaciones y operacion humana
@@ -482,7 +482,7 @@ Entregables:
 - Owners, turnos, SLA, runbooks y simulacro.
 - Cola de denuncias, privacidad y apelaciones con antiguedad visible.
 
-Responsable: Product Ops + SRE.  
+Responsable: Product Ops + SRE.
 Gate: mensajes trazables y un incidente simulado resuelto dentro del SLA.
 
 ### Etapa 6. Piloto cerrado
