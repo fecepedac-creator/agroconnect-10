@@ -16,6 +16,11 @@ build-output/
 # Local Firebase Admin credentials
 credentials/
 serviceAccountKey.json
+*service-account*.json
+*serviceAccount*.json
+*.pem
+*.p12
+*.key
 
 # Editor directories and files
 .vscode/*
@@ -36,3 +41,5 @@ test-results/
 .env.*
 !.env.example
 !.env.local.example
+functions/.env.*
+!functions/.env.*.example

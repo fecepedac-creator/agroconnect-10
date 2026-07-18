@@ -9,6 +9,9 @@ src/ @fecepedac-creator
 
 # CI/CD and operations
 .github/ @fecepedac-creator
+ops/security-scan.ps1 @fecepedac-creator
+scripts/validate-firebase-environments.mjs @fecepedac-creator
+.gitignore @fecepedac-creator
 
 # Documentation
 docs/ @fecepedac-creator

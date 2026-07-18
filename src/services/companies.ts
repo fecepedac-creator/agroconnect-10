@@ -1,4 +1,4 @@
-import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
+import {collection, getDocs, orderBy, query} from "firebase/firestore";
 
 import { db } from "../firebase";
 import type { Company } from "../types";
@@ -15,8 +15,8 @@ export async function getCompanies({ demoMode, demoCompanies = [] }: GetCompanie
     return demoCompanies.filter((company) => company.isPublic);
   }
 
-  const baseRef = collection(db, "companies");
-  const publicQuery = query(baseRef, where("isPublic", "==", true), orderBy("name", "asc"));
+  const baseRef = collection(db, "publicCompanies");
+  const publicQuery = query(baseRef, orderBy("name", "asc"));
 
   try {
     const publicSnap = await getDocs(publicQuery);
@@ -32,7 +32,7 @@ export async function getCompanies({ demoMode, demoCompanies = [] }: GetCompanie
       throw e;
     }
 
-    const publicSnap = await getDocs(query(baseRef, where("isPublic", "==", true)));
+    const publicSnap = await getDocs(baseRef);
     const list = publicSnap.docs.map(
       (docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }) as Company
     );

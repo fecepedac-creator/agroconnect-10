@@ -6,8 +6,13 @@ on:
 jobs:
   readiness:
     runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -21,6 +26,20 @@ jobs:
           npm run lint
           npm run build
           npm run test:rules
+
+      - name: Validate Firebase environment separation
+        shell: pwsh
+        env:
+          FIREBASE_PROJECT_ID_DEV: ${{ secrets.FIREBASE_PROJECT_ID_DEV }}
+          FIREBASE_PROJECT_ID_STAGING: ${{ secrets.FIREBASE_PROJECT_ID_STAGING }}
+          FIREBASE_PROJECT_ID_PROD: ${{ secrets.FIREBASE_PROJECT_ID_PROD }}
+        run: npm run check:firebase-envs
+
+      - name: Audit production dependencies
+        shell: pwsh
+        run: |
+          npm audit --omit=dev --audit-level=high
+          npm --prefix functions audit --omit=dev --audit-level=high
 
       - name: Run functions checks
         shell: pwsh
@@ -40,4 +59,8 @@ jobs:
 
       - name: Run strict security scan
         shell: pwsh
+        env:
+          FIREBASE_PROJECT_ID_DEV: ${{ secrets.FIREBASE_PROJECT_ID_DEV }}
+          FIREBASE_PROJECT_ID_STAGING: ${{ secrets.FIREBASE_PROJECT_ID_STAGING }}
+          FIREBASE_PROJECT_ID_PROD: ${{ secrets.FIREBASE_PROJECT_ID_PROD }}
         run: .\ops\security-scan.ps1 -RequireEnvMapping

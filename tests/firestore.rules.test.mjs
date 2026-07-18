@@ -17,6 +17,10 @@ function workerDb(uid, email) {
   return testEnv.authenticatedContext(uid, { sub: uid, email }).firestore();
 }
 
+function anonymousDb() {
+  return testEnv.unauthenticatedContext().firestore();
+}
+
 function companyAdminDb() {
   return testEnv.authenticatedContext('companyAdminA', {
     sub: 'companyAdminA',
@@ -73,12 +77,22 @@ async function seedBaseData() {
       role: 'worker',
       email: 'workera@example.com',
       companyId: null,
+      rut: '123456785',
     });
 
     await setDoc(doc(db, 'users', 'workerB'), {
       role: 'worker',
       email: 'workerb@example.com',
       companyId: null,
+      rut: '111111111',
+    });
+
+    await setDoc(doc(db, 'workers', 'workerA'), {
+      uid: 'workerA',
+      role: 'worker',
+      email: 'workera@example.com',
+      companyId: null,
+      rut: '123456785',
     });
 
     await setDoc(doc(db, 'users', 'companyAdminA'), {
@@ -160,6 +174,7 @@ async function seedBaseData() {
       name: 'Empresa activa',
       status: 'active',
       subscriptionPlan: 'Basic',
+      isPublic: true,
     });
 
     await setDoc(doc(db, 'companies', 'company_overdue'), {
@@ -172,6 +187,39 @@ async function seedBaseData() {
       name: 'Empresa suspendida',
       status: 'suspended',
       subscriptionPlan: 'Basic',
+    });
+
+    await setDoc(doc(db, 'publicCompanies', COMPANY_ID), {
+      name: 'Empresa activa',
+      region: 'Maule',
+    });
+
+    await setDoc(doc(db, 'comms_outbox', 'active_message'), {
+      companyId: COMPANY_ID,
+      subject: 'Mensaje activo',
+      status: 'queued',
+    });
+
+    await setDoc(doc(db, 'comms_outbox', 'suspended_message'), {
+      companyId: 'company_suspended',
+      subject: 'Mensaje suspendido',
+      status: 'queued',
+    });
+
+    await setDoc(doc(db, 'centers', COMPANY_ID, 'preadmissions', 'preadmission_active'), {
+      centerId: COMPANY_ID,
+      fullName: 'Persona Postulante',
+      email: 'persona@example.com',
+      status: 'pending',
+      createdAt: Timestamp.now(),
+    });
+
+    await setDoc(doc(db, 'centers', 'company_suspended', 'preadmissions', 'preadmission_suspended'), {
+      centerId: 'company_suspended',
+      fullName: 'Persona Postulante',
+      email: 'persona@example.com',
+      status: 'pending',
+      createdAt: Timestamp.now(),
     });
 
     await setDoc(doc(db, 'companies', COMPANY_ID, 'jobs', JOB_ID), {
@@ -196,6 +244,17 @@ async function seedBaseData() {
     await setDoc(doc(db, 'companies', 'company_overdue', 'jobs', 'job_active'), {
       companyId: 'company_overdue',
       title: 'Oferta publicada antes de la morosidad',
+      location: 'Talca',
+      workersNeeded: 5,
+      publishPublic: true,
+      isDraft: false,
+      isActive: true,
+      jobStatus: 'active',
+    });
+
+    await setDoc(doc(db, 'companies', 'company_suspended', 'jobs', 'job_active'), {
+      companyId: 'company_suspended',
+      title: 'Oferta previa a suspension',
       location: 'Talca',
       workersNeeded: 5,
       publishPublic: true,
@@ -322,6 +381,107 @@ async function main() {
 
   const results = [];
 
+  results.push(await runCase('abuse: Internal company document is never public', async () => {
+    await assertFails(getDoc(doc(anonymousDb(), 'companies', COMPANY_ID)));
+    await assertFails(getDoc(doc(workerDb('workerA', 'workera@example.com'), 'companies', COMPANY_ID)));
+  }));
+
+  results.push(await runCase('legit: Public company projection remains public', async () => {
+    await assertSucceeds(getDoc(doc(anonymousDb(), 'publicCompanies', COMPANY_ID)));
+  }));
+
+  results.push(await runCase('legit: Current company lead form schema is accepted', async () => {
+    await assertSucceeds(setDoc(doc(anonymousDb(), 'company_leads', 'valid_lead'), {
+      companyName: 'Agricola Los Robles',
+      rut: '76.123.456-7',
+      email: 'contacto@example.com',
+      notes: 'Solicitud enviada desde el portal de empresas MundoConnect.',
+      status: 'pending',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+  }));
+
+  results.push(await runCase('abuse: Company lead rejects extra fields and forged timestamps', async () => {
+    const db = anonymousDb();
+    const base = {
+      companyName: 'Agricola Los Robles',
+      rut: '76.123.456-7',
+      email: 'contacto@example.com',
+      status: 'pending',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    await assertFails(setDoc(doc(db, 'company_leads', 'extra_field'), {...base, isAdmin: true}));
+    await assertFails(setDoc(doc(db, 'company_leads', 'forged_time'), {...base, createdAt: new Date(0)}));
+    await assertFails(setDoc(doc(db, 'company_leads', 'oversized'), {...base, notes: 'x'.repeat(1001)}));
+  }));
+
+  results.push(await runCase('legit: Current anonymous preadmission schema is accepted', async () => {
+    await assertSucceeds(setDoc(doc(anonymousDb(), 'centers', COMPANY_ID, 'preadmissions', 'valid_public'), {
+      centerId: COMPANY_ID,
+      fullName: 'Maria Gonzalez',
+      email: 'maria@example.com',
+      phone: '+56912345678',
+      rut: '12.345.678-5',
+      reason: 'Postulacion laboral',
+      status: 'pending',
+      createdAt: serverTimestamp(),
+    }));
+  }));
+
+  results.push(await runCase('abuse: Preadmission rejects cross-center, missing identity, and oversized data', async () => {
+    const db = anonymousDb();
+    await assertFails(setDoc(doc(db, 'centers', COMPANY_ID, 'preadmissions', 'cross_center'), {
+      centerId: 'company_suspended',
+      fullName: 'Maria Gonzalez',
+      email: 'maria@example.com',
+      createdAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(db, 'centers', COMPANY_ID, 'preadmissions', 'missing_identity'), {
+      email: 'maria@example.com',
+      createdAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(db, 'centers', COMPANY_ID, 'preadmissions', 'oversized_notes'), {
+      fullName: 'Maria Gonzalez',
+      email: 'maria@example.com',
+      notes: 'x'.repeat(501),
+      createdAt: serverTimestamp(),
+    }));
+  }));
+
+  results.push(await runCase('legit: Active company can update bounded preadmission workflow fields', async () => {
+    await assertSucceeds(updateDoc(
+      doc(companyAdminDb(), 'centers', COMPANY_ID, 'preadmissions', 'preadmission_active'),
+      {status: 'contacted', notes: 'Contacto inicial realizado.', updatedAt: serverTimestamp()}
+    ));
+  }));
+
+  results.push(await runCase('abuse: Company cannot rewrite preadmission identity or add oversized notes', async () => {
+    const ref = doc(companyAdminDb(), 'centers', COMPANY_ID, 'preadmissions', 'preadmission_active');
+    await assertFails(updateDoc(ref, {email: 'attacker@example.com'}));
+    await assertFails(updateDoc(ref, {notes: 'x'.repeat(501), updatedAt: serverTimestamp()}));
+  }));
+
+  results.push(await runCase('legit: Active membership grants outbox and preadmission reads without users cache authority', async () => {
+    const db = companyDb('companyMemberA');
+    await assertSucceeds(getDoc(doc(db, 'comms_outbox', 'active_message')));
+    await assertSucceeds(getDoc(doc(db, 'centers', COMPANY_ID, 'preadmissions', 'preadmission_active')));
+  }));
+
+  results.push(await runCase('abuse: Suspended company loses all company access despite active membership', async () => {
+    const db = companyDb('companyAdminSuspended');
+    await assertFails(getDoc(doc(db, 'companies', 'company_suspended')));
+    await assertFails(getDoc(doc(db, 'comms_outbox', 'suspended_message')));
+    await assertFails(getDoc(doc(db, 'centers', 'company_suspended', 'preadmissions', 'preadmission_suspended')));
+    await assertFails(setDoc(doc(db, 'companies/company_suspended/jobs/job_draft'), {
+      title: 'Borrador bloqueado',
+      isDraft: true,
+      isActive: false,
+      jobStatus: 'draft',
+    }));
+  }));
+
   results.push(await runCase('abuse: Worker A cannot read Worker B username mapping', async () => {
     const db = workerDb('workerA', 'workera@example.com');
     await assertFails(getDoc(doc(db, 'worker_usernames', 'rut-worker-b')));
@@ -340,6 +500,31 @@ async function main() {
   results.push(await runCase('abuse: Owner cannot change email in worker username mapping', async () => {
     const db = workerDb('workerB', 'workerb@example.com');
     await assertFails(updateDoc(doc(db, 'worker_usernames', 'rut-worker-b'), { email: 'new@example.com' }));
+  }));
+
+  results.push(await runCase('abuse: Worker cannot change RUT in users profile', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(updateDoc(doc(db, 'users', 'workerA'), { rut: '111111111' }));
+  }));
+
+  results.push(await runCase('abuse: Worker cannot change RUT in workers profile', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(updateDoc(doc(db, 'workers', 'workerA'), { rut: '111111111' }));
+  }));
+
+  results.push(await runCase('abuse: Client cannot create a worker profile containing RUT', async () => {
+    const db = workerDb('workerC', 'workerc@example.com');
+    await assertFails(setDoc(doc(db, 'workers', 'workerC'), {
+      uid: 'workerC',
+      role: 'worker',
+      email: 'workerc@example.com',
+      rut: '123456785',
+    }));
+  }));
+
+  results.push(await runCase('abuse: Owner cannot delete worker username mapping', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(deleteDoc(doc(db, 'worker_usernames', 'rut-worker-a')));
   }));
 
   results.push(await runCase('abuse: Worker cannot update application status', async () => {
@@ -367,6 +552,8 @@ async function main() {
     await assertFails(getDoc(doc(db, 'matches', 'match_1')));
     await assertFails(getDoc(doc(db, 'discoverableWorkers', 'workerA')));
     await assertFails(getDoc(doc(db, 'companies', COMPANY_ID, 'billing_invoices', 'invoice_1')));
+    await assertFails(getDoc(doc(db, 'comms_outbox', 'active_message')));
+    await assertFails(getDoc(doc(db, 'centers', COMPANY_ID, 'preadmissions', 'preadmission_active')));
   }));
 
   results.push(await runCase('abuse: Company cannot write worker discovery data', async () => {
@@ -501,6 +688,18 @@ async function main() {
     }));
   }));
 
+  results.push(await runCase('abuse: Worker cannot apply to a job owned by a suspended company', async () => {
+    const db = workerDb('workerA', 'workera@example.com');
+    await assertFails(setDoc(
+      doc(db, 'companies/company_suspended/jobs/job_active/applications/workerA'),
+      validApplicationPayload({
+        companyId: 'company_suspended',
+        jobId: 'job_active',
+        companyName: 'Empresa suspendida',
+      })
+    ));
+  }));
+
   results.push(await runCase('abuse: Overdue company cannot keep an existing job published through updates', async () => {
     const db = companyDb('companyAdminOverdue');
     await assertFails(updateDoc(doc(db, 'companies/company_overdue/jobs/job_active'), {
@@ -592,9 +791,9 @@ async function main() {
     }));
   }));
 
-  results.push(await runCase('legit: Suspended company can save a non-published draft', async () => {
-    const db = companyDb('companyAdminSuspended');
-    await assertSucceeds(setDoc(doc(db, 'companies/company_suspended/jobs/job_draft'), {
+  results.push(await runCase('legit: Active company can save a non-published draft', async () => {
+    const db = companyAdminDb();
+    await assertSucceeds(setDoc(doc(db, `companies/${COMPANY_ID}/jobs/job_draft`), {
       title: 'Borrador permitido',
       isDraft: true,
       isActive: false,
@@ -602,9 +801,9 @@ async function main() {
     }));
   }));
 
-  results.push(await runCase('legit: Worker can create initial username mapping for new rut', async () => {
+  results.push(await runCase('abuse: Worker cannot create initial username mapping from client', async () => {
     const db = workerDb('workerA', 'workera@example.com');
-    await assertSucceeds(
+    await assertFails(
       setDoc(doc(db, 'worker_usernames', 'rut-worker-a-new'), {
         uid: 'workerA',
         email: 'workera@example.com',

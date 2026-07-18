@@ -42,6 +42,31 @@ import {
 import { getCompanies } from "./services/companies";
 import {getExpansionSector} from "./expansionSectors";
 type AdminTab = "OVERVIEW" | "COMPANIES" | "REQUESTS" | "TRUST" | "SETTINGS";
+type DataStatus = "loading" | "ready" | "empty" | "error";
+
+const AppDataStateMessage = ({status, loadingMessage, emptyMessage, error, onRetry}: {
+  status: DataStatus;
+  loadingMessage: string;
+  emptyMessage?: string;
+  error: string | null;
+  onRetry: () => void;
+}) => {
+  if (status === "loading") {
+    return <div role="status" aria-live="polite" className="mb-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm font-bold text-gray-600">{loadingMessage}</div>;
+  }
+  if (status === "error") {
+    return (
+      <div role="alert" className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+        <p className="font-bold">{error || "No pudimos cargar esta informacion."}</p>
+        <button type="button" onClick={onRetry} className="mt-3 min-h-11 rounded-xl bg-red-800 px-4 font-black text-white">Reintentar</button>
+      </div>
+    );
+  }
+  if (status === "empty" && emptyMessage) {
+    return <div role="status" aria-live="polite" className="mb-4 rounded-2xl border border-dashed border-gray-300 bg-white p-4 text-sm font-bold text-gray-600">{emptyMessage}</div>;
+  }
+  return null;
+};
 
 const Dashboard = lazy(() => import("./components/Dashboard"));
 const PublishOffer = lazy(() => import("./components/PublishOffer"));
@@ -79,6 +104,10 @@ const App: React.FC = () => {
   // Data State
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [jobs, setJobs] = useState<JobOffer[]>([]);
+  const [jobsStatus, setJobsStatus] = useState<DataStatus>("empty");
+  const [jobsError, setJobsError] = useState<string | null>(null);
+  const [jobsRetryKey, setJobsRetryKey] = useState(0);
+  const [candidateSearchJobId, setCandidateSearchJobId] = useState("");
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companiesLoading, setCompaniesLoading] = useState(true);
   const [companiesError, setCompaniesError] = useState<string | null>(null);
@@ -86,8 +115,14 @@ const App: React.FC = () => {
   // Public workers from Firestore (for Global Search)
   const [publicWorkers, setPublicWorkers] = useState<Worker[]>([]);
   const [publicWorkersLoading, setPublicWorkersLoading] = useState(true);
+  const [publicWorkersStatus, setPublicWorkersStatus] = useState<DataStatus>("loading");
+  const [publicWorkersError, setPublicWorkersError] = useState<string | null>(null);
+  const [publicWorkersRetryKey, setPublicWorkersRetryKey] = useState(0);
   
   const [companyStats, setCompanyStats] = useState<Record<string, any> | null>(null);
+  const [companyStatsStatus, setCompanyStatsStatus] = useState<DataStatus>("empty");
+  const [companyStatsError, setCompanyStatsError] = useState<string | null>(null);
+  const [companyStatsRetryKey, setCompanyStatsRetryKey] = useState(0);
   const [globalStats, setGlobalStats] = useState<{
     companiesTotal?: number;
     companiesActive?: number;
@@ -100,6 +135,9 @@ const App: React.FC = () => {
     hiresTotal?: number;
     workersTotal?: number;
   } | null>(null);
+  const [globalStatsStatus, setGlobalStatsStatus] = useState<DataStatus>("empty");
+  const [globalStatsError, setGlobalStatsError] = useState<string | null>(null);
+  const [globalStatsRetryKey, setGlobalStatsRetryKey] = useState(0);
 
   const [adminConfig, setAdminConfig] = useState<AdminConfig>({
     whatsappNumber: "+56900000000",
@@ -111,6 +149,11 @@ const App: React.FC = () => {
   const [adminTab, setAdminTab] = useState<AdminTab>("OVERVIEW");
 
   const handleRadarClick = () => setCurrentView(AppView.GLOBAL_SEARCH);
+
+  const handleViewCandidates = (jobId: string) => {
+    setCandidateSearchJobId(jobId);
+    setCurrentView(AppView.GLOBAL_SEARCH);
+  };
   const isDemoMode = Boolean(adminConfig.demoMode);
 
   useEffect(() => {
@@ -272,26 +315,41 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentCompany?.id) {
       setCompanyStats(null);
+      setCompanyStatsStatus("empty");
+      setCompanyStatsError(null);
       setJobs([]);
+      setJobsStatus("empty");
+      setJobsError(null);
       return;
     }
+    setCompanyStatsStatus("loading");
+    setCompanyStatsError(null);
     const ref = doc(db, "stats_companies", currentCompany.id);
     const unsub = onSnapshot(
       ref,
-      (snap) => setCompanyStats((snap.data() as any) || null),
-      () => setCompanyStats(null)
+      (snap) => {
+        setCompanyStats((snap.data() as any) || null);
+        setCompanyStatsStatus(snap.exists() ? "ready" : "empty");
+      },
+      (error) => {
+        console.error("Error fetching company stats:", error);
+        setCompanyStatsStatus("error");
+        setCompanyStatsError("No pudimos cargar las estadisticas de la empresa.");
+      }
     );
     return () => unsub();
-  }, [currentCompany?.id]);
+  }, [companyStatsRetryKey, currentCompany?.id]);
 
   useEffect(() => {
     if (!currentCompany?.id) return;
+    setJobsStatus("loading");
+    setJobsError(null);
     const jobsQuery = query(
       collection(db, "companies", currentCompany.id, "jobs"),
       orderBy("createdAt", "desc")
     );
     return onSnapshot(jobsQuery, (snapshot) => {
-      setJobs(snapshot.docs.map((jobDoc) => {
+      const entries = snapshot.docs.map((jobDoc) => {
         const data = jobDoc.data();
         return {
           id: jobDoc.id,
@@ -306,50 +364,59 @@ const App: React.FC = () => {
           isActive: data.isActive ?? false,
           jobStatus: data.jobStatus ?? (data.isActive ? "active" : "future"),
         } as JobOffer;
-      }));
+      });
+      setJobs(entries);
+      setJobsStatus(entries.length === 0 ? "empty" : "ready");
     }, (error) => {
       console.error("Error fetching company jobs:", error);
-      setJobs([]);
+      setJobsStatus("error");
+      setJobsError("No pudimos cargar las ofertas de la empresa.");
     });
-  }, [currentCompany?.id]);
+  }, [currentCompany?.id, jobsRetryKey]);
 
   // Subscribe to global stats for SuperAdmin
   useEffect(() => {
     if (userRole !== UserRole.ADMIN) {
       setGlobalStats(null);
+      setGlobalStatsStatus("empty");
+      setGlobalStatsError(null);
       return;
     }
-    
+    setGlobalStatsStatus("loading");
+    setGlobalStatsError(null);
     const ref = doc(db, "stats", "global");
     const unsub = onSnapshot(
       ref,
       (snap) => {
         if (snap.exists()) {
           setGlobalStats(snap.data() as any);
+          setGlobalStatsStatus("ready");
         } else {
-          // Fallback to computed stats if no document exists
-          setGlobalStats({
-            companiesTotal: 0,
-            companiesActive: 0,
-          });
+          setGlobalStats(null);
+          setGlobalStatsStatus("empty");
         }
       },
       (error) => {
         console.error("Error fetching global stats:", error);
-        setGlobalStats({});
+        setGlobalStatsStatus("error");
+        setGlobalStatsError("No pudimos cargar las estadisticas globales.");
       }
     );
     return () => unsub();
-  }, [userRole]);
+  }, [globalStatsRetryKey, userRole]);
 
   // Subscribe to the privacy-safe worker discovery projection.
   useEffect(() => {
     if (userRole !== UserRole.COMPANY && userRole !== UserRole.ADMIN) {
       setPublicWorkers([]);
       setPublicWorkersLoading(false);
+      setPublicWorkersStatus("empty");
+      setPublicWorkersError(null);
       return;
     }
     setPublicWorkersLoading(true);
+    setPublicWorkersStatus("loading");
+    setPublicWorkersError(null);
     
     // Query workers that are available (consented) and public
     const q = query(
@@ -376,15 +443,17 @@ const App: React.FC = () => {
         });
         setPublicWorkers(list);
         setPublicWorkersLoading(false);
+        setPublicWorkersStatus(list.length === 0 ? "empty" : "ready");
       },
       (error) => {
         console.error("Error fetching public workers:", error);
-        setPublicWorkers([]);
         setPublicWorkersLoading(false);
+        setPublicWorkersStatus("error");
+        setPublicWorkersError("No pudimos cargar los candidatos disponibles.");
       }
     );
     return () => unsub();
-  }, [userRole]);
+  }, [publicWorkersRetryKey, userRole]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -666,6 +735,24 @@ const App: React.FC = () => {
         {/* Content */}
         <Suspense fallback={<div className="text-sm text-gray-500">Cargando modulo...</div>}>
         <div className="p-6">
+          {currentView === AppView.DASHBOARD && userRole === UserRole.COMPANY && (
+            <>
+              <AppDataStateMessage status={companyStatsStatus} loadingMessage="Cargando estadisticas de la empresa..." emptyMessage="Aun no hay estadisticas consolidadas para esta empresa." error={companyStatsError} onRetry={() => setCompanyStatsRetryKey((current) => current + 1)} />
+              <AppDataStateMessage status={jobsStatus} loadingMessage="Cargando ofertas de la empresa..." error={jobsError} onRetry={() => setJobsRetryKey((current) => current + 1)} />
+            </>
+          )}
+          {currentView === AppView.DASHBOARD && userRole === UserRole.ADMIN && (
+            <AppDataStateMessage status={globalStatsStatus} loadingMessage="Cargando estadisticas globales..." emptyMessage="Aun no hay estadisticas globales consolidadas." error={globalStatsError} onRetry={() => setGlobalStatsRetryKey((current) => current + 1)} />
+          )}
+          {(currentView === AppView.JOBS || currentView === AppView.SETTINGS_COMPANY) && currentCompany && (
+            <AppDataStateMessage status={jobsStatus} loadingMessage="Cargando ofertas de la empresa..." error={jobsError} onRetry={() => setJobsRetryKey((current) => current + 1)} />
+          )}
+          {currentView === AppView.GLOBAL_SEARCH && (
+            <>
+              <AppDataStateMessage status={publicWorkersStatus} loadingMessage="Cargando candidatos disponibles..." error={publicWorkersError} onRetry={() => setPublicWorkersRetryKey((current) => current + 1)} />
+              {currentCompany && <AppDataStateMessage status={jobsStatus} loadingMessage="Cargando ofertas para invitar candidatos..." error={jobsError} onRetry={() => setJobsRetryKey((current) => current + 1)} />}
+            </>
+          )}
           {currentView === AppView.DASHBOARD && (
             <Dashboard
               jobs={jobs}
@@ -690,11 +777,11 @@ const App: React.FC = () => {
                 placeholder="Selecciona una empresa para ver y gestionar sus ofertas."
               >
                 {currentCompany && (
-                  <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={() => setCurrentView(AppView.MATCHES)} />
+                  <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={handleViewCandidates} />
                 )}
               </CompanySelector>
             ) : currentCompany ? (
-              <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={() => setCurrentView(AppView.MATCHES)} />
+              <Jobs jobs={jobs} currentCompany={currentCompany} onCreateOffer={() => setCurrentView(AppView.PUBLISH_OFFER)} onViewCandidates={handleViewCandidates} />
             ) : (
               <div className="text-sm text-gray-500">Selecciona una empresa para ver las ofertas.</div>
             ))}
@@ -737,6 +824,7 @@ const App: React.FC = () => {
               isDemo={isDemoMode}
               currentCompany={currentCompany}
               jobs={jobs}
+              initialJobId={candidateSearchJobId}
             />
           )}
           {currentView === AppView.MATCHES && (

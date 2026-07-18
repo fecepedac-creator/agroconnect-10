@@ -1,0 +1,118 @@
+name: Firestore Backup
+
+on:
+  schedule:
+    - cron: '17 05 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to back up
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - prod
+      confirmation:
+        description: Exact phrase BACKUP <project-id> TO gs://<bucket>
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: firestore-backup-${{ github.event_name == 'schedule' && 'prod' || inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Backup ${{ github.event_name == 'schedule' && 'prod' || inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: ${{ (github.event_name == 'schedule' || inputs.environment == 'prod') && 'production' || 'staging' }}
+    env:
+      FIREBASE_PROJECT_ID_STAGING: ${{ secrets.FIREBASE_PROJECT_ID_STAGING }}
+      FIREBASE_PROJECT_ID_PROD: ${{ secrets.FIREBASE_PROJECT_ID_PROD }}
+      FIRESTORE_BACKUP_BUCKET_STAGING: ${{ secrets.FIRESTORE_BACKUP_BUCKET_STAGING }}
+      FIRESTORE_BACKUP_BUCKET_PROD: ${{ secrets.FIRESTORE_BACKUP_BUCKET_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and cross-check explicit target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENVIRONMENT="${{ github.event_name == 'schedule' && 'prod' || inputs.environment }}"
+          case "$ENVIRONMENT" in
+            staging)
+              PROJECT_ID="$FIREBASE_PROJECT_ID_STAGING"
+              BUCKET="$FIRESTORE_BACKUP_BUCKET_STAGING"
+              ;;
+            prod)
+              PROJECT_ID="$FIREBASE_PROJECT_ID_PROD"
+              BUCKET="$FIRESTORE_BACKUP_BUCKET_PROD"
+              ;;
+            *) echo "Unsupported environment: $ENVIRONMENT" >&2; exit 1 ;;
+          esac
+
+          test -n "$PROJECT_ID" || { echo "Project ID is not configured for $ENVIRONMENT." >&2; exit 1; }
+          test -n "$BUCKET" || { echo "Backup bucket is not configured for $ENVIRONMENT." >&2; exit 1; }
+          [[ "$PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || { echo "Invalid explicit Google Cloud project ID." >&2; exit 1; }
+          [[ "$BUCKET" =~ ^gs://[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$ ]] || { echo "Invalid explicit Cloud Storage bucket URI." >&2; exit 1; }
+          if [[ -n "$FIREBASE_PROJECT_ID_STAGING" && -n "$FIREBASE_PROJECT_ID_PROD" && "$FIREBASE_PROJECT_ID_STAGING" == "$FIREBASE_PROJECT_ID_PROD" ]]; then
+            echo "Production and staging project IDs must be different." >&2; exit 1
+          fi
+          if [[ -n "$FIRESTORE_BACKUP_BUCKET_STAGING" && -n "$FIRESTORE_BACKUP_BUCKET_PROD" && "$FIRESTORE_BACKUP_BUCKET_STAGING" == "$FIRESTORE_BACKUP_BUCKET_PROD" ]]; then
+            echo "Production and staging backup buckets must be different." >&2; exit 1
+          fi
+
+          REQUIRED_CONFIRMATION="BACKUP $PROJECT_ID TO ${BUCKET%/}"
+          PROVIDED_CONFIRMATION="${{ github.event_name == 'schedule' && '__SCHEDULED__' || inputs.confirmation }}"
+          if [[ "$PROVIDED_CONFIRMATION" == "__SCHEDULED__" ]]; then
+            PROVIDED_CONFIRMATION="$REQUIRED_CONFIRMATION"
+          fi
+          [[ "$PROVIDED_CONFIRMATION" == "$REQUIRED_CONFIRMATION" ]] || { echo "Manual confirmation does not match the selected target." >&2; exit 1; }
+
+          echo "::add-mask::$PROJECT_ID"
+          echo "::add-mask::$BUCKET"
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "bucket=${BUCKET%/}" >> "$GITHUB_OUTPUT"
+          echo "confirmation=$REQUIRED_CONFIRMATION" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate with Google Cloud using OIDC
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_BACKUP_SERVICE_ACCOUNT }}
+
+      - name: Install Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Export Firestore
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path backup-evidence | Out-Null
+          & ./ops/backup-firestore.ps1 `
+            -Environment '${{ steps.target.outputs.environment }}' `
+            -ProjectId '${{ steps.target.outputs.project_id }}' `
+            -ExpectedProjectId '${{ steps.target.outputs.project_id }}' `
+            -Bucket '${{ steps.target.outputs.bucket }}' `
+            -ExpectedBucket '${{ steps.target.outputs.bucket }}' `
+            -Confirmation '${{ steps.target.outputs.confirmation }}' `
+            -RunId '${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}' `
+            -MetadataPath backup-evidence/export-metadata.json `
+            -Apply *>&1 | Tee-Object -FilePath backup-evidence/export.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload traceable backup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestore-backup-${{ steps.target.outputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backup-evidence/
+          if-no-files-found: error
+          retention-days: 90

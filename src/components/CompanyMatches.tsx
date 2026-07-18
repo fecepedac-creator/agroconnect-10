@@ -12,6 +12,7 @@ type MatchRecord = {
   state?: string;
   workerDecision?: string;
   companyDecision?: string;
+  administrativeClosure?: boolean;
 };
 
 type Contact = {phone?: string | null; email?: string | null};
@@ -31,8 +32,13 @@ const labels: Record<string, string> = {
   worker_interested: "Postulación recibida",
   company_interested: "Invitación enviada",
   matched: "Ambos están interesados",
+  hire_proposed: "Contratación propuesta",
+  hire_rejected: "Contratación rechazada",
   declined: "Proceso finalizado",
   hired: "Contratado",
+  completion_proposed: "Finalización pendiente de confirmación",
+  completion_disputed: "Finalización en revisión",
+  completed: "Trabajo finalizado por ambas partes",
   closed: "Cerrado",
 };
 
@@ -66,7 +72,8 @@ const CompanyMatches: React.FC<{company: Company}> = ({company}) => {
   }, [company.id]);
 
   useEffect(() => {
-    const reviewableMatches = matches.filter((match) => ["hired", "closed"].includes(match.state || ""));
+    const reviewableMatches = matches.filter((match) => match.state === "completed" ||
+      (match.state === "closed" && match.administrativeClosure === true));
     const reviewableIds = new Set(reviewableMatches.map((match) => match.id));
 
     setReviewStates((current) => {
@@ -127,8 +134,12 @@ const CompanyMatches: React.FC<{company: Company}> = ({company}) => {
     setContacts((current) => ({...current, [matchId]: data.contact || {}}));
   });
 
-  const markHired = (matchId: string) => runAction(`hired-${matchId}`, async () => {
-    await httpsCallable(functions, "markMatchHired")({matchId});
+  const proposeHire = (matchId: string) => runAction(`hire-${matchId}`, async () => {
+    await httpsCallable(functions, "proposeMatchHire")({matchId});
+  });
+
+  const proposeCompletion = (matchId: string) => runAction(`completion-${matchId}`, async () => {
+    await httpsCallable(functions, "proposeMatchCompletion")({matchId});
   });
 
   const loadCredentials = (matchId: string) => runAction(`credentials-${matchId}`, async () => {
@@ -168,7 +179,9 @@ const CompanyMatches: React.FC<{company: Company}> = ({company}) => {
         {matches.map((match) => {
           const contact = contacts[match.id];
           const matchCredentials = credentials[match.id] || [];
-          const canSeePrivateDetails = ["matched", "hired", "closed"].includes(match.state || "");
+          const canSeePrivateDetails = ["matched", "hire_proposed", "hired",
+            "completion_proposed", "completion_disputed", "completed", "closed"]
+            .includes(match.state || "");
           return (
             <article key={match.id} className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -224,15 +237,18 @@ const CompanyMatches: React.FC<{company: Company}> = ({company}) => {
                 </div>
               )}
 
-              {match.state === "matched" && <button disabled={Boolean(busy)} onClick={() => markHired(match.id)} className="mt-4 min-h-11 w-full rounded-xl border border-emerald-300 text-sm font-bold text-emerald-800 disabled:opacity-50"><CheckCircle2 size={16} className="mr-1 inline" /> Marcar como contratado</button>}
+              {match.state === "matched" && <button disabled={Boolean(busy)} aria-busy={busy === `hire-${match.id}`} onClick={() => proposeHire(match.id)} className="mt-4 min-h-11 w-full rounded-xl border border-emerald-300 text-sm font-bold text-emerald-800 disabled:opacity-50"><CheckCircle2 size={16} className="mr-1 inline" /> {busy === `hire-${match.id}` ? "Enviando propuesta..." : "Proponer contratación"}</button>}
+              {match.state === "hire_proposed" && <div role="status" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-900">Esperando que el trabajador acepte o rechace la contratación.</div>}
+              {["hired", "completion_disputed"].includes(match.state || "") && <button disabled={Boolean(busy)} aria-busy={busy === `completion-${match.id}`} onClick={() => proposeCompletion(match.id)} className="mt-4 min-h-11 w-full rounded-xl border border-blue-300 text-sm font-bold text-blue-900 disabled:opacity-50"><CheckCircle2 size={16} className="mr-1 inline" /> {busy === `completion-${match.id}` ? "Enviando..." : match.state === "completion_disputed" ? "Volver a proponer finalización" : "Proponer finalización del trabajo"}</button>}
+              {match.state === "completion_proposed" && <div role="status" className="mt-4 rounded-xl bg-blue-50 p-3 text-sm font-bold text-blue-900">Esperando confirmación del trabajador.</div>}
 
-              {["hired", "closed"].includes(match.state || "") && reviewStates[match.id] === "loading" && (
+              {(match.state === "completed" || (match.state === "closed" && match.administrativeClosure)) && reviewStates[match.id] === "loading" && (
                 <div role="status" aria-live="polite" className="mt-4 rounded-xl bg-slate-50 p-3 text-sm font-semibold text-slate-700">Comprobando evaluacion...</div>
               )}
-              {["hired", "closed"].includes(match.state || "") && reviewStates[match.id] === "error" && (
+              {(match.state === "completed" || (match.state === "closed" && match.administrativeClosure)) && reviewStates[match.id] === "error" && (
                 <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-800">{reviewErrors[match.id]}</div>
               )}
-              {["hired", "closed"].includes(match.state || "") && reviewStates[match.id] === "not-reviewed" && (
+              {(match.state === "completed" || (match.state === "closed" && match.administrativeClosure)) && reviewStates[match.id] === "not-reviewed" && (
                 <div className="mt-4 rounded-2xl bg-blue-50 p-4">
                   <div className="font-extrabold text-blue-950">¿Como fue el trabajo?</div>
                   <p className="mt-1 text-xs text-blue-900">La evaluacion se publica cuando ambas partes hayan evaluado.</p>

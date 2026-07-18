@@ -1,14 +1,15 @@
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
+  deleteUser,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
-import { auth, db } from "../firebase";
-import { normalizeRut } from "../utils/rut";
+import { auth, db, functions } from "../firebase";
 
 export type WorkerRegisterInput = {
   fullName: string;
@@ -53,39 +54,6 @@ type WorkerProfile = {
 
 const USERS_COLLECTION = "users";
 const WORKERS_COLLECTION = "workers";
-const WORKER_USERNAMES_COLLECTION = "worker_usernames";
-
-const buildWorkerProfile = (payload: {
-  uid: string;
-  fullName: string;
-  email: string;
-  phone?: string;
-  rut?: string;
-  providers: string[];
-  commune?: string;
-  primaryTrade?: string;
-  sectors?: Array<"agriculture" | "security">;
-  mobility?: "needs_transport" | "public_transport" | "own_transport";
-  consent: WorkerRegisterInput["consent"];
-}): WorkerProfile => ({
-  uid: payload.uid,
-  displayName: payload.fullName,
-  fullName: payload.fullName,
-  rut: payload.rut,
-  email: payload.email,
-  phone: payload.phone,
-  commune: payload.commune,
-  primaryTrade: payload.primaryTrade,
-  sectors: payload.sectors,
-  mobility: payload.mobility,
-  consent: {...payload.consent, acceptedAt: serverTimestamp()},
-  discoverable: payload.consent.matching === true,
-  role: "worker",
-  authProviders: payload.providers,
-  createdAt: serverTimestamp(),
-  updatedAt: serverTimestamp(),
-  lastSeen: serverTimestamp(),
-});
 
 const upsertWorkerDocs = async (uid: string, data: Partial<WorkerProfile>) => {
   const safeData = Object.fromEntries(
@@ -95,39 +63,46 @@ const upsertWorkerDocs = async (uid: string, data: Partial<WorkerProfile>) => {
   await setDoc(doc(db, WORKERS_COLLECTION, uid), safeData, { merge: true });
 };
 
-const upsertWorkerUsername = async (rut: string, payload: { uid: string; email: string }) => {
-  await setDoc(
-    doc(db, WORKER_USERNAMES_COLLECTION, rut),
-    { ...payload, updatedAt: serverTimestamp() },
-    { merge: true }
-  );
-};
+const saveWorkerIdentity = httpsCallable<
+  | {mode: "register"; email: string; rut?: string; profile: Omit<WorkerRegisterInput, "password" | "email" | "rut">}
+  | {mode: "update_rut"; email: string; rut: string},
+  {ok: boolean; uid: string; email: string; rut: string | null}
+>(functions, "upsertWorkerIdentity");
 
 export async function registerWorker(input: WorkerRegisterInput) {
-  const rutNorm = input.rut ? normalizeRut(input.rut) : undefined;
   const email = input.email.trim().toLowerCase();
-  const fullName = input.fullName.trim();
 
   const cred = await createUserWithEmailAndPassword(auth, email, input.password);
-  const uid = cred.user.uid;
-
-  const profile = buildWorkerProfile({
-    uid,
-    fullName,
-    email,
-    phone: input.phone?.trim() || undefined,
-    rut: rutNorm,
-    providers: ["password"],
-    commune: input.commune.trim(),
-    primaryTrade: input.primaryTrade.trim(),
-    sectors: input.sectors,
-    mobility: input.mobility,
-    consent: input.consent,
-  });
-
-  await upsertWorkerDocs(uid, profile);
-  if (rutNorm) {
-    await upsertWorkerUsername(rutNorm, { uid, email });
+  try {
+    await saveWorkerIdentity({
+      mode: "register",
+      email,
+      rut: input.rut,
+      profile: {
+        fullName: input.fullName,
+        phone: input.phone,
+        commune: input.commune,
+        primaryTrade: input.primaryTrade,
+        sectors: input.sectors,
+        mobility: input.mobility,
+        consent: input.consent,
+      },
+    });
+  } catch (error) {
+    const code = String((error as {code?: unknown})?.code || "");
+    const deterministicFailure = [
+      "functions/already-exists",
+      "functions/invalid-argument",
+      "functions/permission-denied",
+    ].includes(code);
+    if (deterministicFailure) {
+      try {
+        await deleteUser(cred.user);
+      } catch (cleanupError) {
+        console.error("No se pudo compensar la cuenta Auth tras fallar el perfil.", cleanupError);
+      }
+    }
+    throw error;
   }
 
   return cred.user;
@@ -221,9 +196,10 @@ export async function updateWorkerProfile(uid: string, input: WorkerProfileUpdat
 }
 
 export async function updateWorkerRut(uid: string, rut: string, email: string) {
-  const rutNorm = normalizeRut(rut);
-  await upsertWorkerDocs(uid, { rut: rutNorm, updatedAt: serverTimestamp() });
-  await upsertWorkerUsername(rutNorm, { uid, email });
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    throw new Error("La sesión no corresponde al perfil que intentas actualizar.");
+  }
+  await saveWorkerIdentity({mode: "update_rut", rut, email});
 }
 
 export async function logoutWorker() {

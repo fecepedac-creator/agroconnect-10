@@ -10,13 +10,14 @@ interface GlobalSearchProps {
   isLoading?: boolean;
   isDemo?: boolean;
   currentCompany?: Company | null;
+  initialJobId?: string;
 }
 
-const GlobalSearch: React.FC<GlobalSearchProps> = ({ onInviteWorker, globalWorkers, jobs, isLoading = false, isDemo = false, currentCompany = null }) => {
+const GlobalSearch: React.FC<GlobalSearchProps> = ({ onInviteWorker, globalWorkers, jobs, isLoading = false, isDemo = false, currentCompany = null, initialJobId = "" }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [radius, setRadius] = useState(50);
   const [selectedSkill, setSelectedSkill] = useState("all");
-  const [selectedJobId, setSelectedJobId] = useState("");
+  const [selectedJobId, setSelectedJobId] = useState(initialJobId);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationPending, setLocationPending] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
@@ -26,8 +27,12 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ onInviteWorker, globalWorke
   const availableSkills = useMemo(() => Array.from(new Set(globalWorkers.flatMap((worker) => worker.skills))).sort(), [globalWorkers]);
 
   useEffect(() => {
+    if (initialJobId && activeJobs.some((job) => job.id === initialJobId)) {
+      setSelectedJobId(initialJobId);
+      return;
+    }
     if (!activeJobs.some((job) => job.id === selectedJobId)) setSelectedJobId(activeJobs[0]?.id || "");
-  }, [activeJobs, selectedJobId]);
+  }, [activeJobs, initialJobId, selectedJobId]);
 
   useEffect(() => {
     getCurrentPosition().then(setUserLocation).catch(() => setUserLocation(null)).finally(() => setLocationPending(false));
