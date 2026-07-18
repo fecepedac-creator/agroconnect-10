@@ -58,7 +58,10 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: firestore-rules
+    env:
+      SUPERADMIN_EMAILS: superadmin@mundoconnect.test
     steps:
       - uses: actions/checkout@v4
 
@@ -79,6 +82,9 @@ jobs:
           npm ci
           npm --prefix functions ci
           npx playwright install --with-deps chromium
+
+      - name: Configure emulator-only function parameters
+        run: printf 'SUPERADMIN_EMAILS=%s\n' "$SUPERADMIN_EMAILS" > functions/.env.demo-mundoconnect
 
       - name: Run role and sector E2E
         run: npm run test:e2e:emulated
