@@ -10,4 +10,3 @@ node_modules/
 *.local
 .env*
 !.env*.example
-!.env.demo-mundoconnect

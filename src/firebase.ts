@@ -10,26 +10,23 @@ import { connectFunctionsEmulator, getFunctions, httpsCallable, type Functions }
  *
  * Proyecto: agroconnect-10-14242150-423d4
  */
-const developmentDefaults = {
-  apiKey: "AIzaSyApfbowH8aWZBjfyjAgggpUXLkDWjDYGmA",
-  authDomain: "agroconnect-10-14242150-423d4.firebaseapp.com",
-  projectId: "agroconnect-10-14242150-423d4",
-  storageBucket: "agroconnect-10-14242150-423d4.firebasestorage.app",
-  messagingSenderId: "517674718866",
-  appId: "1:517674718866:web:b8d82bf49234458b28b84b",
+// Firebase configuration is supplied explicitly per environment.
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId:
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-// Deploy workflows provide these values per environment. Defaults keep local
-// development compatible with the existing Firebase project.
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || developmentDefaults.apiKey,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || developmentDefaults.authDomain,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || developmentDefaults.projectId,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || developmentDefaults.storageBucket,
-  messagingSenderId:
-    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || developmentDefaults.messagingSenderId,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || developmentDefaults.appId,
-};
+const missingFirebaseConfig = Object.entries(firebaseConfig)
+  .filter(([, value]) => !String(value || "").trim())
+  .map(([name]) => name);
+if (missingFirebaseConfig.length > 0) {
+  throw new Error(`Firebase configuration is incomplete: ${missingFirebaseConfig.join(", ")}`);
+}
 
 export const app: FirebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 export const db: Firestore = getFirestore(app);
