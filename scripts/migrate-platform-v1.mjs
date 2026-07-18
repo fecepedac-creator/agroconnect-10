@@ -23,7 +23,9 @@ const summary = {
   companies: 0,
   workers: 0,
   membershipsPrepared: 0,
+  publicCompaniesPrepared: 0,
   discoveryProfilesPrepared: 0,
+  discoveryProfilesRemoved: 0,
   adminAccountsMissing: 0,
 };
 
@@ -31,6 +33,24 @@ const companies = await db.collection("companies").get();
 summary.companies = companies.size;
 for (const company of companies.docs) {
   const data = company.data();
+  if (data.isPublic === true && data.status === "active") {
+    writes.push({
+      ref: db.collection("publicCompanies").doc(company.id),
+      data: {
+        name: String(data.name || "").trim(),
+        logoUrl: typeof data.logoUrl === "string" ? data.logoUrl : null,
+        region: typeof data.region === "string" ? data.region : null,
+        rubro: typeof data.rubro === "string" ? data.rubro : null,
+        sector: typeof data.sector === "string" ? data.sector : null,
+        sectors: Array.isArray(data.sectors) ? data.sectors.slice(0, 20) : [],
+        status: "active",
+        verified: data.verified === true,
+        updatedAt: FieldValue.serverTimestamp(),
+        schemaVersion: 1,
+      },
+    });
+    summary.publicCompaniesPrepared += 1;
+  }
   const email = String(data.adminEmail || "").trim().toLowerCase();
   if (!email) continue;
   try {
@@ -64,6 +84,15 @@ const workers = await db.collection("workers").get();
 summary.workers = workers.size;
 for (const worker of workers.docs) {
   const data = worker.data();
+  const hasMatchingConsent = data.consent?.matching === true && data.discoverable !== false;
+  if (!hasMatchingConsent) {
+    writes.push({
+      ref: db.collection("discoverableWorkers").doc(worker.id),
+      delete: true,
+    });
+    summary.discoveryProfilesRemoved += 1;
+    continue;
+  }
   const fullName = String(data.displayName || data.fullName || "").trim();
   const parts = fullName.split(/\s+/).filter(Boolean);
   const displayName = parts.length > 1
@@ -98,7 +127,11 @@ if (!apply) {
 for (let offset = 0; offset < writes.length; offset += 400) {
   const batch = db.batch();
   for (const write of writes.slice(offset, offset + 400)) {
-    batch.set(write.ref, write.data, { merge: true });
+    if (write.delete) {
+      batch.delete(write.ref);
+    } else {
+      batch.set(write.ref, write.data, { merge: true });
+    }
   }
   await batch.commit();
 }
