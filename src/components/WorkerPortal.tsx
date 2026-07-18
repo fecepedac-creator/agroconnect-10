@@ -490,7 +490,7 @@ const SafetyReportButton = ({job}: {job: JobListing}) => {
   );
 };
 
-const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied: boolean; onApply: () => void }) => (
+const JobDetailPrivate = ({ job, applied, applying, onApply }: { job: JobListing; applied: boolean; applying: boolean; onApply: () => void }) => (
   <div className="space-y-6">
     <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
       <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
@@ -554,14 +554,15 @@ const JobDetailPrivate = ({ job, applied, onApply }: { job: JobListing; applied:
     <div className="flex flex-col sm:flex-row gap-3">
       <button
         onClick={onApply}
-        disabled={applied}
+        disabled={applied || applying}
+        aria-busy={applying}
         className={`flex-1 px-6 py-3 rounded-2xl text-sm font-black uppercase tracking-widest transition ${
           applied
             ? "bg-emerald-100 text-emerald-600 cursor-not-allowed"
             : "bg-emerald-600 text-white hover:bg-emerald-700"
         }`}
       >
-        {applied ? "Ya postulaste" : "Postular ahora"}
+        {applied ? "Ya postulaste" : applying ? "Enviando postulacion..." : "Postular ahora"}
       </button>
       <div className="flex-1 rounded-2xl border border-gray-100 bg-white p-4 text-xs text-gray-500 flex items-center gap-2">
         <ClipboardList size={16} className="text-emerald-600" />
@@ -588,6 +589,8 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
   const [reviewStates, setReviewStates] = useState<Record<string, ReviewState>>({});
   const [reviewErrors, setReviewErrors] = useState<Record<string, string>>({});
   const [reviewBusy, setReviewBusy] = useState("");
+  const [actionBusy, setActionBusy] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authUser) {
@@ -679,21 +682,38 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
     : false;
 
   const handleApply = async () => {
-    if (!authUser || !selectedJob) return;
+    if (!authUser || !selectedJob || actionBusy) return;
 
-    const applyToJob = httpsCallable(functions, "applyToJob");
-    await applyToJob({
-      companyId: selectedJob.companyId,
-      jobId: selectedJob.id,
-    });
+    setActionError(null);
+    setActionBusy(`apply-${selectedJob.id}`);
+    try {
+      const applyToJob = httpsCallable(functions, "applyToJob");
+      await applyToJob({
+        companyId: selectedJob.companyId,
+        jobId: selectedJob.id,
+      });
+    } catch (error: any) {
+      setActionError(error?.message || "No pudimos registrar tu postulacion. Intenta nuevamente.");
+    } finally {
+      setActionBusy("");
+    }
   };
 
   const handleMatchDecision = async (
     matchId: string,
     decision: "interested" | "declined"
   ) => {
-    const respondToMatch = httpsCallable(functions, "respondToMatch");
-    await respondToMatch({matchId, decision});
+    if (actionBusy) return;
+    setActionError(null);
+    setActionBusy(`match-${matchId}`);
+    try {
+      const respondToMatch = httpsCallable(functions, "respondToMatch");
+      await respondToMatch({matchId, decision});
+    } catch (error: any) {
+      setActionError(error?.message || "No pudimos guardar tu respuesta. Intenta nuevamente.");
+    } finally {
+      setActionBusy("");
+    }
   };
 
   const handleRevealContact = async (matchId: string) => {
@@ -866,12 +886,16 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
                   <div className="mt-4 grid grid-cols-2 gap-3">
                     <button
                       onClick={() => handleMatchDecision(match.id, "declined")}
+                      disabled={actionBusy === `match-${match.id}`}
+                      aria-busy={actionBusy === `match-${match.id}`}
                       className="min-h-11 rounded-xl border border-gray-300 bg-white text-sm font-bold text-gray-700"
                     >
                       No me interesa
                     </button>
                     <button
                       onClick={() => handleMatchDecision(match.id, "interested")}
+                      disabled={actionBusy === `match-${match.id}`}
+                      aria-busy={actionBusy === `match-${match.id}`}
                       className="min-h-11 rounded-xl bg-emerald-600 text-sm font-bold text-white"
                     >
                       Me interesa
@@ -880,6 +904,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
                 </div>
               ))}
             {matchNotice && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{matchNotice}</div>}
+            {actionError && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{actionError}</div>}
             {applications.length === 0 && matches.length === 0 && (
               <div className="text-sm text-gray-400 text-center py-12 border border-dashed rounded-2xl">
                 Aún no tienes postulaciones registradas.
@@ -952,7 +977,10 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
               <p className="text-sm text-gray-500 mt-2">{experience.jobsDescription}</p>
             </div>
             {jobIdMatch && selectedJob ? (
-              <JobDetailPrivate job={selectedJob} applied={appliedToSelected} onApply={handleApply} />
+              <>
+                {actionError && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{actionError}</div>}
+                <JobDetailPrivate job={selectedJob} applied={appliedToSelected} applying={actionBusy === `apply-${selectedJob.id}`} onApply={handleApply} />
+              </>
             ) : (
               <div className="grid gap-4">
                 {visibleJobs.map((job) => (
