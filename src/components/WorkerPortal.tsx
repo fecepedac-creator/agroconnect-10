@@ -77,6 +77,14 @@ type MatchContact = {
 };
 
 type ReviewState = "loading" | "not-reviewed" | "reviewed" | "error";
+type DataStatus = "loading" | "ready" | "empty" | "error";
+
+type DataResult<T> = {
+  data: T;
+  status: DataStatus;
+  error: string | null;
+  retry: () => void;
+};
 
 const usePath = () => {
   const [path, setPath] = useState(window.location.pathname);
@@ -113,10 +121,16 @@ const useAuthUser = () => {
   return { authUser, loading };
 };
 
-const useJobs = () => {
+const useJobs = (): DataResult<JobListing[]> => {
   const [jobs, setJobs] = useState<JobListing[]>([]);
+  const [status, setStatus] = useState<DataStatus>("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const retry = useCallback(() => setRetryKey((current) => current + 1), []);
 
   useEffect(() => {
+    setStatus("loading");
+    setError(null);
     const q = query(collection(db, "publicJobs"), orderBy("updatedAt", "desc"));
     const unsub = onSnapshot(q, async (snap) => {
       const entries = await Promise.all(
@@ -163,23 +177,35 @@ const useJobs = () => {
       );
 
       setJobs(entries);
+      setStatus(entries.length === 0 ? "empty" : "ready");
+    }, () => {
+      setStatus("error");
+      setError("No pudimos cargar las ofertas. Revisa tu conexion e intenta nuevamente.");
     });
 
     return () => unsub();
-  }, []);
+  }, [retryKey]);
 
-  return jobs;
+  return {data: jobs, status, error, retry};
 };
 
-const useWorkerApplications = (uid?: string) => {
+const useWorkerApplications = (uid?: string): DataResult<WorkerApplication[]> => {
   const [applications, setApplications] = useState<WorkerApplication[]>([]);
+  const [status, setStatus] = useState<DataStatus>("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const retry = useCallback(() => setRetryKey((current) => current + 1), []);
 
   useEffect(() => {
     if (!uid) {
       setApplications([]);
+      setStatus("empty");
+      setError(null);
       return;
     }
 
+    setStatus("loading");
+    setError(null);
     const q = query(collection(db, "workers", uid, "applications"), orderBy("appliedAt", "desc"));
     const unsub = onSnapshot(q, (snap) => {
       const list = snap.docs.map((docSnap) => ({
@@ -187,38 +213,89 @@ const useWorkerApplications = (uid?: string) => {
         ...(docSnap.data() as any),
       }));
       setApplications(list as WorkerApplication[]);
+      setStatus(list.length === 0 ? "empty" : "ready");
+    }, () => {
+      setStatus("error");
+      setError("No pudimos cargar tus postulaciones. Intenta nuevamente.");
     });
 
     return () => unsub();
-  }, [uid]);
+  }, [retryKey, uid]);
 
-  return applications;
+  return {data: applications, status, error, retry};
 };
 
-const useWorkerMatches = (uid?: string) => {
+const useWorkerMatches = (uid?: string): DataResult<WorkerMatch[]> => {
   const [matches, setMatches] = useState<WorkerMatch[]>([]);
+  const [status, setStatus] = useState<DataStatus>("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const retry = useCallback(() => setRetryKey((current) => current + 1), []);
 
   useEffect(() => {
     if (!uid) {
       setMatches([]);
+      setStatus("empty");
+      setError(null);
       return;
     }
+    setStatus("loading");
+    setError(null);
     const matchesQuery = query(
       collection(db, "matches"),
       where("workerId", "==", uid),
       orderBy("updatedAt", "desc")
     );
     const unsub = onSnapshot(matchesQuery, (snap) => {
-      setMatches(snap.docs.map((matchDoc) => ({
+      const entries = snap.docs.map((matchDoc) => ({
         id: matchDoc.id,
         ...(matchDoc.data() as Omit<WorkerMatch, "id">),
-      })));
+      }));
+      setMatches(entries);
+      setStatus(entries.length === 0 ? "empty" : "ready");
+    }, () => {
+      setStatus("error");
+      setError("No pudimos cargar tus conexiones con empresas. Intenta nuevamente.");
     });
     return () => unsub();
-  }, [uid]);
+  }, [retryKey, uid]);
 
-  return matches;
+  return {data: matches, status, error, retry};
 };
+
+const DataStateMessage = ({
+  status,
+  loadingMessage,
+  error,
+  onRetry,
+}: {
+  status: DataStatus;
+  loadingMessage: string;
+  error: string | null;
+  onRetry: () => void;
+}) => {
+  if (status === "loading") {
+    return <div role="status" aria-live="polite" className="rounded-2xl border border-gray-200 bg-white p-4 text-sm font-bold text-gray-600">{loadingMessage}</div>;
+  }
+  if (status === "error") {
+    return (
+      <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+        <p className="font-bold">{error || "No pudimos cargar esta informacion."}</p>
+        <button type="button" onClick={onRetry} className="mt-3 min-h-11 rounded-xl bg-red-800 px-4 font-black text-white">Reintentar</button>
+      </div>
+    );
+  }
+  return null;
+};
+
+const UnavailableJob = ({onBack}: {onBack: () => void}) => (
+  <section role="status" aria-live="polite" className="rounded-3xl border border-amber-200 bg-amber-50 p-8 text-center">
+    <AlertTriangle size={32} className="mx-auto text-amber-700" aria-hidden="true" />
+    <h2 className="mt-4 text-xl font-black text-amber-950">Oferta no disponible</h2>
+    <p className="mt-2 text-sm text-amber-900">La oferta no existe, fue cerrada o ya no esta publicada.</p>
+    <button type="button" onClick={onBack} className="mt-5 min-h-12 rounded-2xl bg-amber-900 px-5 text-sm font-black text-white">Volver al listado</button>
+  </section>
+);
 
 const RegisterCTASticky = ({ onClick }: { onClick: () => void }) => (
   <div className="fixed bottom-0 inset-x-0 z-40 bg-emerald-600 text-white">
@@ -490,7 +567,7 @@ const SafetyReportButton = ({job}: {job: JobListing}) => {
   );
 };
 
-const JobDetailPrivate = ({ job, applied, applying, onApply }: { job: JobListing; applied: boolean; applying: boolean; onApply: () => void }) => (
+const JobDetailPrivate = ({ job, applied, applying, canApply, onApply }: { job: JobListing; applied: boolean; applying: boolean; canApply: boolean; onApply: () => void }) => (
   <div className="space-y-6">
     <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
       <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
@@ -554,7 +631,7 @@ const JobDetailPrivate = ({ job, applied, applying, onApply }: { job: JobListing
     <div className="flex flex-col sm:flex-row gap-3">
       <button
         onClick={onApply}
-        disabled={applied || applying}
+        disabled={applied || applying || !canApply}
         aria-busy={applying}
         className={`flex-1 px-6 py-3 rounded-2xl text-sm font-black uppercase tracking-widest transition ${
           applied
@@ -562,7 +639,7 @@ const JobDetailPrivate = ({ job, applied, applying, onApply }: { job: JobListing
             : "bg-emerald-600 text-white hover:bg-emerald-700"
         }`}
       >
-        {applied ? "Ya postulaste" : applying ? "Enviando postulacion..." : "Postular ahora"}
+        {applied ? "Ya postulaste" : applying ? "Enviando postulacion..." : canApply ? "Postular ahora" : "Comprobando postulacion..."}
       </button>
       <div className="flex-1 rounded-2xl border border-gray-100 bg-white p-4 text-xs text-gray-500 flex items-center gap-2">
         <ClipboardList size={16} className="text-emerald-600" />
@@ -578,11 +655,20 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
   const experience = SECTOR_EXPERIENCES[sector];
   const go = useCallback((to: string) => navigate(`${to}${sectorQuery(sector)}`), [navigate, sector]);
   const { authUser, loading } = useAuthUser();
-  const jobs = useJobs();
-  const applications = useWorkerApplications(authUser?.uid);
-  const matches = useWorkerMatches(authUser?.uid);
+  const jobsResult = useJobs();
+  const applicationsResult = useWorkerApplications(authUser?.uid);
+  const matchesResult = useWorkerMatches(authUser?.uid);
+  const jobs = jobsResult.data;
+  const applications = applicationsResult.data;
+  const matches = matchesResult.data;
   const [workerProfile, setWorkerProfile] = useState<WorkerProfile | null>(null);
   const [workerDocs, setWorkerDocs] = useState<WorkerDocument[]>([]);
+  const [profileStatus, setProfileStatus] = useState<DataStatus>("loading");
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileRetryKey, setProfileRetryKey] = useState(0);
+  const [documentsStatus, setDocumentsStatus] = useState<DataStatus>("loading");
+  const [documentsError, setDocumentsError] = useState<string | null>(null);
+  const [documentsRetryKey, setDocumentsRetryKey] = useState(0);
   const [matchContacts, setMatchContacts] = useState<Record<string, MatchContact>>({});
   const [matchNotice, setMatchNotice] = useState<string | null>(null);
   const [reviewScores, setReviewScores] = useState<Record<string, number>>({});
@@ -596,25 +682,42 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
     if (!authUser) {
       setWorkerProfile(null);
       setWorkerDocs([]);
+      setProfileStatus("empty");
+      setProfileError(null);
+      setDocumentsStatus("empty");
+      setDocumentsError(null);
       return;
     }
 
+    setProfileStatus("loading");
+    setProfileError(null);
+    setDocumentsStatus("loading");
+    setDocumentsError(null);
     const workerRef = doc(db, "workers", authUser.uid);
     const docsRef = collection(db, "workers", authUser.uid, "documents");
 
     const unsubWorker = onSnapshot(workerRef, (snap) => {
       setWorkerProfile((snap.data() as WorkerProfile) ?? null);
+      setProfileStatus(snap.exists() ? "ready" : "empty");
+    }, () => {
+      setProfileStatus("error");
+      setProfileError("No pudimos cargar tu perfil. Intenta nuevamente.");
     });
 
     const unsubDocs = onSnapshot(docsRef, (snap) => {
-      setWorkerDocs(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })));
+      const entries = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }));
+      setWorkerDocs(entries);
+      setDocumentsStatus(entries.length === 0 ? "empty" : "ready");
+    }, () => {
+      setDocumentsStatus("error");
+      setDocumentsError("No pudimos cargar tus documentos. Intenta nuevamente.");
     });
 
     return () => {
       unsubWorker();
       unsubDocs();
     };
-  }, [authUser]);
+  }, [authUser, documentsRetryKey, profileRetryKey]);
 
   useEffect(() => {
     if (!authUser) {
@@ -775,6 +878,9 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
     return (
       <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
         <div className="grid gap-6">
+          <DataStateMessage status={profileStatus} loadingMessage="Cargando tu perfil..." error={profileError} onRetry={() => setProfileRetryKey((current) => current + 1)} />
+          <DataStateMessage status={applicationsResult.status} loadingMessage="Cargando tus postulaciones..." error={applicationsResult.error} onRetry={applicationsResult.retry} />
+          <DataStateMessage status={jobsResult.status} loadingMessage="Cargando ofertas disponibles..." error={jobsResult.error} onRetry={jobsResult.retry} />
           <div className={`bg-white rounded-3xl border p-6 shadow-sm ${getSectorTheme(sector).softBorder}`}>
             <h2 className="text-xl font-extrabold text-gray-900">¡Hola, {workerProfile?.fullName || "Trabajador"}!</h2>
             <p className="text-sm text-gray-500 mt-2">
@@ -783,11 +889,11 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
             <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className={`rounded-2xl p-4 border ${getSectorTheme(sector).soft}`}>
                 <div className="text-xs font-bold">Postulaciones activas</div>
-                <div className="text-2xl font-black mt-2">{applications.length}</div>
+                <div className="text-2xl font-black mt-2">{applicationsResult.status === "loading" ? "..." : applicationsResult.status === "error" ? "-" : applications.length}</div>
               </div>
               <div className="rounded-2xl bg-white p-4 border border-gray-100">
                 <div className="text-xs text-gray-500 font-bold">Ofertas disponibles</div>
-                <div className="text-2xl font-black text-gray-800 mt-2">{visibleJobs.length}</div>
+                <div className="text-2xl font-black text-gray-800 mt-2">{jobsResult.status === "loading" ? "..." : jobsResult.status === "error" ? "-" : visibleJobs.length}</div>
               </div>
               <button onClick={() => go("/worker/perfil")} className={`rounded-2xl bg-white p-4 border border-gray-100 text-left ${getSectorTheme(sector).hoverBorder}`}>
                 <div className="text-xs text-gray-500 font-bold">Perfil</div>
@@ -804,8 +910,8 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
               </button>
             </div>
             <div className="mt-4 grid gap-4">
-              {visibleJobs.length === 0 && <div className="rounded-2xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">Todavía no hay ofertas disponibles en esta área.</div>}
-              {visibleJobs.slice(0, 3).map((job) => (
+              {jobsResult.status === "empty" && <div className="rounded-2xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">Todavía no hay ofertas disponibles en esta área.</div>}
+              {jobsResult.status === "ready" && visibleJobs.slice(0, 3).map((job) => (
                 <JobCardPrivate
                   key={`${job.companyId}-${job.id}`}
                   job={job}
@@ -827,6 +933,8 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
           <h2 className="text-xl font-extrabold text-gray-900">Mis postulaciones</h2>
           <p className="text-sm text-gray-500 mt-2">Cada trabajo aparece una sola vez con su estado actual.</p>
           <div className="mt-6 grid gap-4">
+            <DataStateMessage status={applicationsResult.status} loadingMessage="Cargando tus postulaciones..." error={applicationsResult.error} onRetry={applicationsResult.retry} />
+            <DataStateMessage status={matchesResult.status} loadingMessage="Cargando conexiones con empresas..." error={matchesResult.error} onRetry={matchesResult.retry} />
             {matches
               .filter((match) => ["matched", "hired"].includes(String(match.state || "")))
               .map((match) => {
@@ -905,7 +1013,7 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
               ))}
             {matchNotice && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{matchNotice}</div>}
             {actionError && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{actionError}</div>}
-            {applications.length === 0 && matches.length === 0 && (
+            {applicationsResult.status === "empty" && matchesResult.status === "empty" && (
               <div className="text-sm text-gray-400 text-center py-12 border border-dashed rounded-2xl">
                 Aún no tienes postulaciones registradas.
               </div>
@@ -936,7 +1044,10 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
     return (
       <WorkerLayout onNavigate={go} onLogout={handleLogout} sector={sector}>
         <div className="grid gap-6">
-          <WorkerProfileEditor uid={authUser.uid} email={authUser.email || ""} profile={workerProfile} sector={sector} />
+          <DataStateMessage status={profileStatus} loadingMessage="Cargando tu perfil..." error={profileError} onRetry={() => setProfileRetryKey((current) => current + 1)} />
+          {profileStatus !== "loading" && profileStatus !== "error" && (
+            <WorkerProfileEditor uid={authUser.uid} email={authUser.email || ""} profile={workerProfile} sector={sector} />
+          )}
 
           <WorkerCredentialsPanel uid={authUser.uid} sector={sector} />
 
@@ -944,12 +1055,13 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
             <h3 className="text-lg font-extrabold text-gray-900">Documentos laborales</h3>
             <p className="text-sm text-gray-500 mt-2">Estado de tus documentos registrados.</p>
             <div className="mt-6 grid gap-3">
-              {workerDocs.length === 0 && (
+              <DataStateMessage status={documentsStatus} loadingMessage="Cargando tus documentos..." error={documentsError} onRetry={() => setDocumentsRetryKey((current) => current + 1)} />
+              {documentsStatus === "empty" && (
                 <div className="text-sm text-gray-400 text-center py-10 border border-dashed rounded-2xl">
                   Aún no hay documentos registrados.
                 </div>
               )}
-              {workerDocs.map((docItem) => (
+              {documentsStatus === "ready" && workerDocs.map((docItem) => (
                 <div key={docItem.id} className="border border-gray-100 rounded-2xl p-4 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-bold text-gray-900">{docItem.id}</div>
@@ -976,10 +1088,14 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
               <h2 className="text-2xl font-extrabold text-gray-900">{experience.jobsTitle}</h2>
               <p className="text-sm text-gray-500 mt-2">{experience.jobsDescription}</p>
             </div>
-            {jobIdMatch && selectedJob ? (
+            <DataStateMessage status={jobsResult.status} loadingMessage="Cargando ofertas disponibles..." error={jobsResult.error} onRetry={jobsResult.retry} />
+            {jobsResult.status === "loading" || jobsResult.status === "error" ? null : jobIdMatch && !selectedJob ? (
+              <UnavailableJob onBack={() => go("/trabajos")} />
+            ) : jobIdMatch && selectedJob ? (
               <>
+                <DataStateMessage status={applicationsResult.status} loadingMessage="Comprobando si ya postulaste..." error={applicationsResult.error} onRetry={applicationsResult.retry} />
                 {actionError && <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800">{actionError}</div>}
-                <JobDetailPrivate job={selectedJob} applied={appliedToSelected} applying={actionBusy === `apply-${selectedJob.id}`} onApply={handleApply} />
+                <JobDetailPrivate job={selectedJob} applied={appliedToSelected} applying={actionBusy === `apply-${selectedJob.id}`} canApply={applicationsResult.status === "ready" || applicationsResult.status === "empty"} onApply={handleApply} />
               </>
             ) : (
               <div className="grid gap-4">
@@ -991,6 +1107,9 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
                     onSelect={() => go(`/trabajos/${job.id}`)}
                   />
                 ))}
+                {visibleJobs.length === 0 && (
+                  <div className="rounded-3xl border border-dashed border-gray-300 bg-white p-10 text-center text-sm text-gray-500">No hay ofertas disponibles en esta seccion.</div>
+                )}
               </div>
             )}
           </div>
@@ -1005,7 +1124,10 @@ const WorkerPortal: React.FC<WorkerPortalProps> = ({ onExit, sector = "agricultu
             <h2 className="text-2xl font-extrabold text-gray-900">{experience.jobsTitle}</h2>
             <p className="text-sm text-gray-500 mt-2">{experience.jobsDescription}</p>
           </div>
-          {jobIdMatch && selectedJob ? (
+          <DataStateMessage status={jobsResult.status} loadingMessage="Cargando ofertas disponibles..." error={jobsResult.error} onRetry={jobsResult.retry} />
+          {jobsResult.status === "loading" || jobsResult.status === "error" ? null : jobIdMatch && !selectedJob ? (
+            <UnavailableJob onBack={() => go("/trabajos")} />
+          ) : jobIdMatch && selectedJob ? (
             <JobDetailPublic job={selectedJob} />
           ) : (
             <div className="grid gap-4">
